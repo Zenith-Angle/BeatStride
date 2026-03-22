@@ -1,0 +1,12 @@
+node_modules
+dist
+out
+coverage
+.DS_Store
+*.log
+*.tmp
+*.temp
+*.tsbuildinfo
+ffmpeg/*.exe
+ffmpeg/bin/*.exe
+resources/ffmpeg/*.exe

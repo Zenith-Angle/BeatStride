@@ -1,0 +1,22 @@
+export const IPC_CHANNELS = {
+  appGetSettings: 'app:get-settings',
+  appSaveSettings: 'app:save-settings',
+  appCheckFfmpeg: 'app:check-ffmpeg',
+  appOpenExternal: 'app:open-external',
+  dialogSelectAudioFiles: 'dialog:select-audio-files',
+  dialogSelectAudioFolder: 'dialog:select-audio-folder',
+  dialogSelectExportDir: 'dialog:select-export-dir',
+  projectNew: 'project:new',
+  projectOpen: 'project:open',
+  projectOpenByPath: 'project:open-by-path',
+  projectSave: 'project:save',
+  projectSaveAs: 'project:save-as',
+  projectSaveRecovery: 'project:save-recovery',
+  projectLoadRecovery: 'project:load-recovery',
+  audioProbe: 'audio:probe',
+  exportSingle: 'export:single',
+  exportMedley: 'export:medley',
+  exportProgress: 'export:progress',
+  exportLog: 'export:log',
+  menuAction: 'menu:action'
+} as const;

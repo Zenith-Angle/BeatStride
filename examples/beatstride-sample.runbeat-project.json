@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "meta": {
+    "id": "demo-project-001",
+    "name": "BeatStride Demo",
+    "createdAt": "2026-03-22T00:00:00.000Z",
+    "updatedAt": "2026-03-22T00:00:00.000Z"
+  },
+  "globalTargetBpm": 180,
+  "timeSignature": "4/4",
+  "defaultMetronomeSamplePath": "",
+  "theme": "light",
+  "language": "zh-CN",
+  "tracks": [
+    {
+      "id": "track-001",
+      "name": "180BPM.mp3",
+      "filePath": "C:/CodeProgram/BeatStride/180BPM.mp3",
+      "durationMs": 30000,
+      "sampleRate": 44100,
+      "channels": 2,
+      "detectedBpm": 180,
+      "sourceBpm": 180,
+      "targetBpm": 180,
+      "speedRatio": 1,
+      "downbeatOffsetMs": 0,
+      "metronomeOffsetMs": 0,
+      "trackStartMs": 0,
+      "trimInMs": 0,
+      "trimOutMs": 0,
+      "fadeInMs": 0,
+      "fadeOutMs": 0,
+      "volumeDb": 0,
+      "pan": 0,
+      "metronomeEnabled": true,
+      "metronomeVolumeDb": -8,
+      "exportEnabled": true,
+      "inTimeline": true
+    }
+  ],
+  "exportPreset": {
+    "mode": "single",
+    "format": "wav",
+    "sampleRate": 48000,
+    "bitrateKbps": 320,
+    "outputDir": "",
+    "fileSuffix": "__mix",
+    "normalizeLoudness": false,
+    "gapMs": 0,
+    "crossfadeMs": 0
+  }
+}
