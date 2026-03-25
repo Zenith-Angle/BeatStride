@@ -23,9 +23,13 @@ interface ProjectState {
   patchProject: (patch: Partial<ProjectFile>) => void;
   updateTrack: (trackId: string, patch: Partial<Track>) => void;
   removeCheckedTracks: () => void;
+  removeTracksByIds: (trackIds: string[]) => void;
   toggleLibraryCheck: (trackId: string) => void;
   setAllLibraryChecked: (checked: boolean) => void;
-  addCheckedToTimeline: () => void;
+  setLibraryCheckedIds: (ids: string[]) => void;
+  setTracksWorkEnabled: (trackIds: string[], enabled: boolean) => void;
+  setCheckedMedleyEnabled: (enabled: boolean) => void;
+  moveTrack: (trackId: string, direction: 'up' | 'down') => void;
   selectTimelineTrack: (trackId: string | null) => void;
   undo: () => void;
   redo: () => void;
@@ -42,7 +46,7 @@ function normalizeProject(project: ProjectFile): ProjectFile {
     ...project,
     tracks: project.tracks.map((track) => ({
       ...track,
-      inTimeline: Boolean(track.inTimeline),
+      inTimeline: Boolean(track.inTimeline || track.exportEnabled),
       exportEnabled: Boolean(track.exportEnabled)
     }))
   };
@@ -146,7 +150,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!recovered) {
       return;
     }
-    set({ project: normalizeProject(recovered), dirty: true });
+    set({
+      project: normalizeProject(recovered),
+      libraryCheckedIds: [],
+      activeTimelineTrackId: null,
+      undoStack: [],
+      redoStack: [],
+      dirty: true
+    });
   },
   addTracksFromFiles: (items) => {
     const state = get();
@@ -255,24 +266,28 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
   removeCheckedTracks: () => {
+    get().removeTracksByIds(get().libraryCheckedIds);
+  },
+  removeTracksByIds: (trackIds) => {
     const state = get();
-    if (!state.project || state.libraryCheckedIds.length === 0) {
+    if (!state.project || trackIds.length === 0) {
       return;
     }
     const prev = cloneProject(state.project);
-    const selected = new Set(state.libraryCheckedIds);
-    const next: ProjectFile = {
-      ...state.project,
-      tracks: state.project.tracks.filter((track) => !selected.has(track.id)),
-      meta: {
-        ...state.project.meta,
-        updatedAt: new Date().toISOString()
-      }
-    };
+    const selected = new Set(trackIds);
+    const nextTracks = state.project.tracks.filter((track) => !selected.has(track.id));
+    const activeStillExists = nextTracks.some((track) => track.id === state.activeTimelineTrackId);
     set({
-      project: next,
-      libraryCheckedIds: [],
-      activeTimelineTrackId: null,
+      project: {
+        ...state.project,
+        tracks: nextTracks,
+        meta: {
+          ...state.project.meta,
+          updatedAt: new Date().toISOString()
+        }
+      },
+      libraryCheckedIds: state.libraryCheckedIds.filter((id) => !selected.has(id)),
+      activeTimelineTrackId: activeStillExists ? state.activeTimelineTrackId : null,
       undoStack: [...state.undoStack, prev].slice(-50),
       redoStack: [],
       dirty: true
@@ -293,37 +308,37 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
     set({ libraryCheckedIds: checked ? project.tracks.map((track) => track.id) : [] });
   },
-  addCheckedToTimeline: () => {
+  setLibraryCheckedIds: (ids) => {
+    set({ libraryCheckedIds: [...new Set(ids)] });
+  },
+  setTracksWorkEnabled: (trackIds, enabled) => {
     const state = get();
-    if (!state.project || state.libraryCheckedIds.length === 0) {
+    if (!state.project || trackIds.length === 0) {
       return;
     }
 
     const prev = cloneProject(state.project);
-    let cursor = 0;
-    const timelineTracks = state.project.tracks
-      .filter((track) => track.inTimeline)
-      .sort((a, b) => a.trackStartMs - b.trackStartMs);
-    for (const track of timelineTracks) {
-      cursor = Math.max(cursor, track.trackStartMs + track.durationMs);
-    }
-
-    const selected = new Set(state.libraryCheckedIds);
+    const selected = new Set(trackIds);
     const nextTracks = state.project.tracks.map((track) => {
-      if (!selected.has(track.id) || track.inTimeline) {
+      if (!selected.has(track.id)) {
         return track;
       }
-      const next: Track = {
+      return {
         ...track,
-        inTimeline: true,
-        exportEnabled: true,
-        trackStartMs: cursor
+        inTimeline: enabled,
+        exportEnabled: enabled
       };
-      cursor += track.durationMs;
-      return next;
     });
-
-    const activeTrack = nextTracks.find((track) => selected.has(track.id) && track.inTimeline);
+    const nextCheckedIds = state.libraryCheckedIds.filter((id) => !selected.has(id));
+    const activeStillVisible = nextTracks.some(
+      (track) => track.id === state.activeTimelineTrackId && track.exportEnabled
+    );
+    const nextActive =
+      enabled
+        ? trackIds[0] ?? state.activeTimelineTrackId
+        : activeStillVisible
+          ? state.activeTimelineTrackId
+          : null;
 
     set({
       project: {
@@ -331,7 +346,45 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         tracks: nextTracks,
         meta: { ...state.project.meta, updatedAt: new Date().toISOString() }
       },
-      activeTimelineTrackId: activeTrack?.id ?? state.activeTimelineTrackId,
+      libraryCheckedIds: nextCheckedIds,
+      activeTimelineTrackId: nextActive,
+      undoStack: [...state.undoStack, prev].slice(-50),
+      redoStack: [],
+      dirty: true
+    });
+  },
+  setCheckedMedleyEnabled: (enabled) => {
+    const checkedIds = get().libraryCheckedIds;
+    get().setTracksWorkEnabled(checkedIds, enabled);
+  },
+  moveTrack: (trackId, direction) => {
+    const state = get();
+    if (!state.project) {
+      return;
+    }
+    const workTracks = state.project.tracks.filter((track) => track.exportEnabled);
+    const currentWorkIndex = workTracks.findIndex((track) => track.id === trackId);
+    if (currentWorkIndex < 0) {
+      return;
+    }
+    const targetWorkIndex = direction === 'up' ? currentWorkIndex - 1 : currentWorkIndex + 1;
+    if (targetWorkIndex < 0 || targetWorkIndex >= workTracks.length) {
+      return;
+    }
+
+    const prev = cloneProject(state.project);
+    const nextWorkTracks = [...workTracks];
+    const [track] = nextWorkTracks.splice(currentWorkIndex, 1);
+    nextWorkTracks.splice(targetWorkIndex, 0, track!);
+    const pendingTracks = state.project.tracks.filter((item) => !item.exportEnabled);
+    const nextTracks = [...pendingTracks, ...nextWorkTracks];
+
+    set({
+      project: {
+        ...state.project,
+        tracks: nextTracks,
+        meta: { ...state.project.meta, updatedAt: new Date().toISOString() }
+      },
       undoStack: [...state.undoStack, prev].slice(-50),
       redoStack: [],
       dirty: true

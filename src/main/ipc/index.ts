@@ -102,6 +102,42 @@ export function registerIpcHandlers(): void {
     return result.canceled ? '' : result.filePaths[0] ?? '';
   });
 
+  ipcMain.handle(IPC_CHANNELS.dialogSelectFfmpegPath, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select FFmpeg Binary',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Executable', extensions: process.platform === 'win32' ? ['exe'] : ['*'] }
+      ]
+    });
+    return result.canceled ? '' : result.filePaths[0] ?? '';
+  });
+
+  ipcMain.handle(IPC_CHANNELS.dialogSelectFfprobePath, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select FFprobe Binary',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Executable', extensions: process.platform === 'win32' ? ['exe'] : ['*'] }
+      ]
+    });
+    return result.canceled ? '' : result.filePaths[0] ?? '';
+  });
+
+  ipcMain.handle(IPC_CHANNELS.dialogSelectMetronomeSample, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select Metronome Sample',
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'Audio',
+          extensions: SUPPORTED_IMPORT_EXT.map((ext) => ext.replace('.', ''))
+        }
+      ]
+    });
+    return result.canceled ? '' : result.filePaths[0] ?? '';
+  });
+
   ipcMain.handle(IPC_CHANNELS.projectNew, async () => {
     const dirPath = projectService.selectProjectDirectory();
     if (!dirPath) {

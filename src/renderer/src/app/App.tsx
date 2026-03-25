@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEventHandler } from 'react';
-import { buildSingleTrackPreviewPlan } from '@shared/services/previewPlanService';
+import { useEffect, useRef, useState, type DragEventHandler } from 'react';
 import { I18nProvider } from '@renderer/features/i18n/I18nProvider';
 import { ThemeProvider } from '@renderer/features/theme/ThemeProvider';
 import { useAppSettingsStore } from '@renderer/stores/appSettingsStore';
@@ -13,7 +12,7 @@ import { useExportStore } from '@renderer/stores/exportStore';
 import { TitleBar } from '@renderer/components/TitleBar';
 import { WelcomePage } from '@renderer/components/WelcomePage';
 import { TrackLibraryPanel } from '@renderer/features/library/TrackLibraryPanel';
-import { TimelinePanel } from '@renderer/features/timeline/TimelinePanel';
+import { PreviewPanel } from '@renderer/features/preview/PreviewPanel';
 import { InspectorPanel } from '@renderer/components/InspectorPanel';
 import { SettingsPage } from '@renderer/features/settings/SettingsPage';
 import { ExportPanel } from '@renderer/features/export/ExportPanel';
@@ -34,16 +33,10 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const project = projectStore.project;
   const tracks = project?.tracks ?? [];
+  const pendingTracks = tracks.filter((track) => !track.exportEnabled);
   const selectedTrack = tracks.find(
     (item) => item.id === projectStore.activeTimelineTrackId
   );
-
-  const previewPlan = useMemo(() => {
-    if (!selectedTrack || !project) {
-      return null;
-    }
-    return buildSingleTrackPreviewPlan(selectedTrack, project);
-  }, [project, selectedTrack]);
 
   const handleImportFiles = async (filePaths?: string[]) => {
     const paths = filePaths ?? (await window.beatStride.selectAudioFiles());
@@ -121,6 +114,8 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
         projectName={project.meta.name}
         onOpenSettings={onOpenSettings}
         onExport={() => setShowExport(true)}
+        onImport={() => void handleImportFiles()}
+        onImportFolder={() => void projectStore.addTracksFromFolder()}
       />
       <div
         ref={workspaceRef}
@@ -142,14 +137,24 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
       >
         <div className="workspace-left">
           <TrackLibraryPanel
-            tracks={tracks}
+            tracks={pendingTracks}
             checkedTrackIds={projectStore.libraryCheckedIds}
-            onImport={() => void handleImportFiles()}
-            onImportFolder={() => void projectStore.addTracksFromFolder()}
+            selectedTrackId={selectedTrack?.id}
+            onSelectTrack={projectStore.selectTimelineTrack}
             onToggleTrack={projectStore.toggleLibraryCheck}
-            onToggleAll={projectStore.setAllLibraryChecked}
-            onDeleteChecked={projectStore.removeCheckedTracks}
-            onAddCheckedToTimeline={projectStore.addCheckedToTimeline}
+            onToggleAll={(checked) =>
+              projectStore.setLibraryCheckedIds(
+                checked ? pendingTracks.map((track) => track.id) : []
+              )
+            }
+            onIncludeCheckedInMedley={() => projectStore.setCheckedMedleyEnabled(true)}
+            onRemoveChecked={() =>
+              projectStore.removeTracksByIds(
+                pendingTracks
+                  .filter((track) => projectStore.libraryCheckedIds.includes(track.id))
+                  .map((track) => track.id)
+              )
+            }
           />
         </div>
         <div
@@ -157,36 +162,51 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
           onMouseDown={() => setResizing('left')}
         />
         <div className="workspace-center">
-          <TimelinePanel
+          <PreviewPanel
             project={project}
-            tracks={tracks}
-            selectedTrackId={selectedTrack?.id}
+            selectedTrack={selectedTrack}
+            checkedTrackIds={projectStore.libraryCheckedIds}
+            playingTrackId={playbackStore.playingTrackId}
             currentTimeMs={playbackStore.currentTimeMs}
-            onTrackStartChange={(trackId, trackStartMs) =>
-              projectStore.updateTrack(trackId, { trackStartMs })
-            }
+            currentLabel={playbackStore.currentLabel}
+            isPlaying={playbackStore.isPlaying}
+            target={playbackStore.target}
+            mode={playbackStore.mode}
+            onSelectTarget={playbackStore.setTarget}
+            onSelectMode={playbackStore.setMode}
             onSelectTrack={projectStore.selectTimelineTrack}
-            onPreviewOriginal={() => playbackStore.setMode('original')}
-            onPreviewProcessed={() => playbackStore.setMode('processed')}
-            onPreviewMetronome={() => playbackStore.setMode('metronome')}
-            onPreviewPlay={() => {
-              if (selectedTrack && previewPlan) {
-                void playbackStore.playTrack(selectedTrack, previewPlan);
+            onToggleTrackCheck={projectStore.toggleLibraryCheck}
+            onToggleAllQueueChecked={(checked) =>
+              projectStore.setLibraryCheckedIds(
+                checked ? tracks.filter((track) => track.exportEnabled).map((track) => track.id) : []
+              )
+            }
+            onPlaySingle={() => {
+              if (selectedTrack && project) {
+                void playbackStore.playTrack(selectedTrack, project);
+              }
+            }}
+            onPlayMedley={() => {
+              if (project) {
+                void playbackStore.playMedley(project);
               }
             }}
             onStop={playbackStore.stop}
-            onUndo={projectStore.undo}
-            onRedo={projectStore.redo}
-            onRemoveFromTimeline={() => {
-              if (!selectedTrack) {
-                return;
+            onMoveSelectedTrack={(direction) => {
+              if (selectedTrack) {
+                projectStore.moveTrack(selectedTrack.id, direction);
               }
-              projectStore.updateTrack(selectedTrack.id, {
-                inTimeline: false,
-                exportEnabled: false
-              });
-              projectStore.selectTimelineTrack(null);
             }}
+            onRemoveCheckedFromQueue={() =>
+              projectStore.setTracksWorkEnabled(
+                tracks.filter(
+                  (track) =>
+                    track.exportEnabled &&
+                    projectStore.libraryCheckedIds.includes(track.id)
+                ).map((track) => track.id),
+                false
+              )
+            }
           />
         </div>
         <div

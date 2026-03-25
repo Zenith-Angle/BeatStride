@@ -31,6 +31,9 @@ export interface BeatStrideApi {
   selectAudioFiles(): Promise<string[]>;
   selectAudioFolder(): Promise<string[]>;
   selectExportDirectory(): Promise<string>;
+  selectFfmpegPath(): Promise<string>;
+  selectFfprobePath(): Promise<string>;
+  selectMetronomeSamplePath(): Promise<string>;
   createNewProject(): Promise<ProjectFile | null>;
   openProject(): Promise<ProjectFile | null>;
   openProjectByPath(filePath: string): Promise<ProjectFile | null>;

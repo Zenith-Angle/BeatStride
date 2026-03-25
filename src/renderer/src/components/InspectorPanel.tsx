@@ -51,14 +51,14 @@ export function InspectorPanel({
   return (
     <aside className="panel">
       <div className="panel-header">
-        <strong>音乐处理</strong>
+        <strong>处理参数</strong>
       </div>
       <div ref={splitRootRef} className="inspector-split no-drag">
         <div
           className="panel-content inspector-top"
           style={{ height: topHeight, borderBottom: '1px solid var(--line)' }}
         >
-          <h4 style={{ margin: 0, marginBottom: 10 }}>节拍器</h4>
+          <h4 style={{ margin: 0, marginBottom: 10 }}>节拍器调整 / 节拍器音乐修改 / 节拍调整</h4>
           <div className="properties-grid">
             <label className="field inline">
               <span>全局目标 BPM</span>
@@ -93,22 +93,12 @@ export function InspectorPanel({
           onMouseDown={() => setResizing(true)}
         />
         <div className="panel-content inspector-bottom">
-          <h4 style={{ margin: 0, marginBottom: 10 }}>微调</h4>
+          <h4 style={{ margin: 0, marginBottom: 10 }}>对选择的歌曲做调整</h4>
           {!track ? (
             <p className="muted">{t('status.noTrackSelected')}</p>
           ) : (
             <>
               <div className="properties-grid">
-                <label className="field inline">
-                  <span>{t('inspector.trackStart')}</span>
-                  <input
-                    type="number"
-                    value={track.trackStartMs}
-                    onChange={(event) =>
-                      onUpdateTrack(track.id, { trackStartMs: Number(event.target.value) })
-                    }
-                  />
-                </label>
                 <label className="field inline">
                   <span>{t('inspector.trimIn')}</span>
                   <input

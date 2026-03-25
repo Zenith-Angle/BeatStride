@@ -62,8 +62,7 @@ export const useExportStore = create<ExportState>((set) => ({
       const plan = buildSingleTrackExportPlan(track, {
         outputDir: options.outputDir,
         format: options.format,
-        metronomeSamplePath:
-          project.defaultMetronomeSamplePath || project.exportPreset.outputDir,
+        metronomeSamplePath: project.defaultMetronomeSamplePath,
         normalizeLoudness: project.exportPreset.normalizeLoudness
       });
       const outputPath = await window.beatStride.runSingleExport({
@@ -103,8 +102,7 @@ export const useExportStore = create<ExportState>((set) => ({
       const plan = buildMedleyExportPlan(project, {
         outputDir: options.outputDir,
         format: options.format,
-        metronomeSamplePath:
-          project.defaultMetronomeSamplePath || project.exportPreset.outputDir,
+        metronomeSamplePath: project.defaultMetronomeSamplePath,
         normalizeLoudness: project.exportPreset.normalizeLoudness,
         gapMs: project.exportPreset.gapMs,
         crossfadeMs: project.exportPreset.crossfadeMs

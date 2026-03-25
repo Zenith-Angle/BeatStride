@@ -3,6 +3,7 @@
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
+  --radius-xl: 22px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -11,6 +12,7 @@
   --space-6: 24px;
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.12);
 }
 
 :root[data-theme='light'] {

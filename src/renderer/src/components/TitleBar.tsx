@@ -1,53 +1,39 @@
 import { useI18n } from '@renderer/features/i18n/I18nProvider';
-import { useState } from 'react';
-import colorLogo from '@renderer/assets/bs-color.png';
-import monoLogo from '@renderer/assets/bs-mono.png';
 
 interface TitleBarProps {
   projectName?: string;
   onOpenSettings: () => void;
   onExport: () => void;
+  onImport: () => void;
+  onImportFolder: () => void;
 }
 
 export function TitleBar({
-  projectName,
+  projectName: _projectName,
   onOpenSettings,
-  onExport
+  onExport,
+  onImport,
+  onImportFolder
 }: TitleBarProps) {
   const { t } = useI18n();
-  const [monoMissing, setMonoMissing] = useState(false);
-  const [colorMissing, setColorMissing] = useState(false);
 
   return (
     <header className="titlebar">
-      <div className="drag-area">
-        {monoMissing ? (
-          <div className="logo-fallback mono">SB</div>
-        ) : (
-          <img
-            className="logo mono"
-            src={monoLogo}
-            alt="BeatStride mono logo"
-            onError={() => setMonoMissing(true)}
-          />
-        )}
-        <strong>{projectName ?? t('app.title')}</strong>
+      <div className="drag-area no-drag top-action-strip">
+        <button className="wire-btn" onClick={onImport}>
+          导入文件
+        </button>
+        <button className="wire-btn" onClick={onImportFolder}>
+          导入文件夹
+        </button>
+        <button className="wire-btn" onClick={onOpenSettings}>
+          {t('common.settings')}
+        </button>
       </div>
       <div className="toolbar-actions no-drag">
-        <button className="pill primary" onClick={onExport}>
+        <button className="export-box" onClick={onExport}>
           {t('common.export')}
         </button>
-        <button className="pill" onClick={onOpenSettings}>{t('common.settings')}</button>
-        {colorMissing ? (
-          <div className="logo-fallback color">SB</div>
-        ) : (
-          <img
-            className="logo color"
-            src={colorLogo}
-            alt="BeatStride color logo"
-            onError={() => setColorMissing(true)}
-          />
-        )}
       </div>
     </header>
   );
