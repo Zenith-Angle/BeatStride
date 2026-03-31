@@ -48,6 +48,8 @@ interface PlaybackState {
   setTarget: (target: PreviewTarget) => void;
   setVolume: (volume: number) => void;
   setPreviewPosition: (timeMs: number, label?: string, trackId?: string | null) => void;
+  seekToPreviewPosition: (timeMs: number) => boolean;
+  pause: () => void;
   playTrack: (track: Track, project: ProjectFile, options?: PlaybackStartOptions) => Promise<void>;
   playMedley: (project: ProjectFile, options?: PlaybackStartOptions) => Promise<void>;
   stop: () => void;
@@ -64,6 +66,7 @@ const activeAudioElements = new Set<HTMLAudioElement>();
 let masterGainNode: GainNode | null = null;
 let previewVolume = 1;
 const metronomeBufferCache = new Map<string, Promise<AudioBuffer | null>>();
+let activePlaybackSegments: PlaybackSegment[] = [];
 
 function logPreviewDebug(scope: string, payload: Record<string, unknown>): void {
   console.info(`[BeatStride][${scope}]`, payload);
@@ -147,6 +150,7 @@ function stopActivePlayback(): void {
   playbackToken += 1;
   stopAllAudioElements();
   audio = null;
+  activePlaybackSegments = [];
   clearPreviewNodes();
   clearBlobUrls();
   if (frame !== null) {
@@ -158,6 +162,78 @@ function stopActivePlayback(): void {
 function stopEverything(): void {
   cancelPendingRequests();
   stopActivePlayback();
+}
+
+function resolveSegmentAtPreviewTime(
+  segments: PlaybackSegment[],
+  previewTimeMs: number
+): { segment: PlaybackSegment; baseMs: number; offsetMs: number } | null {
+  if (segments.length === 0) {
+    return null;
+  }
+
+  let baseMs = 0;
+  for (const segment of segments) {
+    const segmentEndMs = baseMs + segment.previewDurationMs;
+    if (previewTimeMs < segmentEndMs) {
+      return {
+        segment,
+        baseMs,
+        offsetMs: Math.max(0, previewTimeMs - baseMs)
+      };
+    }
+    baseMs = segmentEndMs;
+  }
+
+  const lastSegment = segments.at(-1);
+  if (!lastSegment) {
+    return null;
+  }
+  return {
+    segment: lastSegment,
+    baseMs: Math.max(0, baseMs - lastSegment.previewDurationMs),
+    offsetMs: lastSegment.previewDurationMs
+  };
+}
+
+function seekActivePlayback(
+  previewTimeMs: number,
+  set: (partial: Partial<PlaybackState> | ((state: PlaybackState) => Partial<PlaybackState>)) => void
+): boolean {
+  const currentAudio = audio;
+  if (!currentAudio || activePlaybackSegments.length === 0) {
+    return false;
+  }
+
+  const resolved = resolveSegmentAtPreviewTime(activePlaybackSegments, previewTimeMs);
+  if (!resolved || resolved.segment.kind !== 'track') {
+    return false;
+  }
+
+  const nextOffsetMs = Math.max(0, Math.min(resolved.segment.previewDurationMs, resolved.offsetMs));
+  const nextCurrentTime =
+    (resolved.segment.sourceStartSec ?? 0) +
+    (nextOffsetMs * (resolved.segment.playbackRate ?? 1)) / 1000;
+
+  try {
+    clearPreviewNodes();
+    currentAudio.playbackRate = resolved.segment.playbackRate ?? 1;
+    currentAudio.currentTime = nextCurrentTime;
+    scheduleMetronome(resolved.segment, nextOffsetMs);
+    set({
+      isPlaying: !currentAudio.paused,
+      currentTimeMs: resolved.baseMs + nextOffsetMs,
+      currentLabel: resolved.segment.resolveLabel?.(nextOffsetMs) ?? resolved.segment.label,
+      playingTrackId: resolved.segment.resolveTrackId?.(nextOffsetMs) ?? resolved.segment.trackId
+    });
+    pushDebug(
+      set,
+      `原地定位到 ${(resolved.baseMs + nextOffsetMs).toFixed(0)}ms / audio=${nextCurrentTime.toFixed(2)}s`
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function ensureAudioContext(): Promise<AudioContext> {
@@ -540,6 +616,7 @@ async function playSegments(
   startPreviewMs: number,
   set: (partial: Partial<PlaybackState> | ((state: PlaybackState) => Partial<PlaybackState>)) => void
 ): Promise<void> {
+  activePlaybackSegments = segments;
   let baseMs = 0;
 
   for (const segment of segments) {
@@ -602,6 +679,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       currentLabel: label,
       playingTrackId: trackId,
       isPlaying: false
+    });
+  },
+  seekToPreviewPosition: (timeMs) => seekActivePlayback(Math.max(0, Math.round(timeMs)), set),
+  pause: () => {
+    const { currentTimeMs, currentLabel, playingTrackId } = get();
+    stopEverything();
+    pushDebug(set, `用户暂停试听 | position=${currentTimeMs}ms`);
+    set({
+      isPlaying: false,
+      playingTrackId,
+      currentTimeMs,
+      currentLabel
     });
   },
   playTrack: async (track, project, options) => {

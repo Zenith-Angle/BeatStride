@@ -331,9 +331,11 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
           : previewPlan.processedDurationMs;
       const nextPositionMs = Math.max(0, Math.min(durationMs, Math.round(requestedTimeMs)));
       if (playback.isPlaying) {
-        void playbackStore.playTrack(selectedTrack, project, {
-          startPreviewMs: nextPositionMs
-        });
+        if (!playbackStore.seekToPreviewPosition(nextPositionMs)) {
+          void playbackStore.playTrack(selectedTrack, project, {
+            startPreviewMs: nextPositionMs
+          });
+        }
         return;
       }
       playbackStore.setPreviewPosition(nextPositionMs, selectedTrack.name, selectedTrack.id);
@@ -357,9 +359,11 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
     const nextTrackId = currentClip?.track.trackId ?? null;
 
     if (playback.isPlaying) {
-      void playbackStore.playMedley(project, {
-        startPreviewMs: nextPositionMs
-      });
+      if (!playbackStore.seekToPreviewPosition(nextPositionMs)) {
+        void playbackStore.playMedley(project, {
+          startPreviewMs: nextPositionMs
+        });
+      }
       return;
     }
     playbackStore.setPreviewPosition(nextPositionMs, nextLabel, nextTrackId);
@@ -581,6 +585,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
                 });
               }
             }}
+            onPause={playbackStore.pause}
             onStop={playbackStore.stop}
             onReorderTrack={projectStore.reorderWorkTrack}
             onGenerateTrackProxies={() => void handleGenerateTrackProxies()}
