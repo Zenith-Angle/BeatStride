@@ -1,4 +1,10 @@
 import { useEffect, useRef, useState, type DragEventHandler } from 'react';
+import { buildSingleTrackExportPlan } from '@shared/services/exportPlanService';
+import {
+  buildProjectPreviewExportPlan,
+  buildSingleTrackPreviewPlan
+} from '@shared/services/previewPlanService';
+import type { SingleTrackExportPlan, TrackProxyStatus } from '@shared/types';
 import { I18nProvider } from '@renderer/features/i18n/I18nProvider';
 import { ThemeProvider } from '@renderer/features/theme/ThemeProvider';
 import { useAppSettingsStore } from '@renderer/stores/appSettingsStore';
@@ -19,6 +25,15 @@ import { ExportPanel } from '@renderer/features/export/ExportPanel';
 import { useI18n } from '@renderer/features/i18n/I18nProvider';
 
 type PageMode = 'welcome' | 'editor';
+const TRACK_PROXY_BITRATE_KBPS = 160;
+
+interface ProxyGenerationState {
+  total: number;
+  completed: number;
+  failed: number;
+  currentTrackName: string;
+  cancelRequested: boolean;
+}
 
 function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { t } = useI18n();
@@ -29,7 +44,18 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [leftWidth, setLeftWidth] = useState(320);
   const [rightWidth, setRightWidth] = useState(360);
   const [resizing, setResizing] = useState<null | 'left' | 'right'>(null);
+  const [importing, setImporting] = useState(false);
+  const [generatingTrackProxies, setGeneratingTrackProxies] = useState(false);
+  const [proxyStatusByTrackId, setProxyStatusByTrackId] = useState<Record<string, TrackProxyStatus>>({});
+  const [proxyGenerationState, setProxyGenerationState] = useState<ProxyGenerationState>({
+    total: 0,
+    completed: 0,
+    failed: 0,
+    currentTrackName: '',
+    cancelRequested: false
+  });
   const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const proxyGenerationCancelRef = useRef(false);
 
   const project = projectStore.project;
   const tracks = project?.tracks ?? [];
@@ -46,13 +72,297 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (!projectStore.project) {
       await projectStore.createProject();
     }
-    const probed = await Promise.all(
-      paths.map(async (filePath) => ({
-        filePath,
-        probe: await window.beatStride.probeAudio(filePath)
-      }))
+    const currentProject = useProjectStore.getState().project;
+    const analysisSeconds = currentProject?.mixTuning.analysisSeconds ?? 120;
+
+    setImporting(true);
+    try {
+      const probed = await Promise.all(
+        paths.map(async (filePath) => {
+          const [probe, tempo] = await Promise.all([
+            window.beatStride.probeAudio(filePath),
+            window.beatStride.detectTempo(filePath, analysisSeconds).catch(() => ({
+              bpm: 0,
+              confidence: 0
+            }))
+          ]);
+
+          return {
+            filePath,
+            probe,
+            detectedBpm: tempo.bpm > 0 ? tempo.bpm : undefined
+          };
+        })
+      );
+      projectStore.addTracksFromFiles(probed);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleImportFolder = async () => {
+    const paths = await window.beatStride.selectAudioFolder();
+    await handleImportFiles(paths);
+  };
+
+  const handleSwitchMode = (mode: typeof playbackStore.mode) => {
+    if (!project) {
+      return;
+    }
+    const playback = usePlaybackStore.getState();
+    const previousMode = playback.mode;
+    let startPreviewMs = playback.currentTimeMs;
+
+    if (
+      playback.target === 'single' &&
+      selectedTrack &&
+      previousMode !== mode
+    ) {
+      const previewPlan = buildSingleTrackPreviewPlan(selectedTrack, project);
+      const speedRatio = Math.max(0.0001, previewPlan.speedRatio);
+
+      if (previousMode === 'original' && mode !== 'original') {
+        startPreviewMs = Math.round(startPreviewMs / speedRatio);
+      } else if (previousMode !== 'original' && mode === 'original') {
+        startPreviewMs = Math.round(startPreviewMs * speedRatio);
+      }
+
+      const nextDurationMs =
+        mode === 'original'
+          ? previewPlan.trimmedSourceDurationMs
+          : previewPlan.processedDurationMs;
+      startPreviewMs = Math.max(0, Math.min(startPreviewMs, nextDurationMs));
+    }
+
+    playbackStore.setMode(mode);
+
+    if (!playback.isPlaying || previousMode === mode) {
+      return;
+    }
+    if (playback.target === 'single') {
+      if (selectedTrack) {
+        void playbackStore.playTrack(selectedTrack, project, { startPreviewMs });
+      }
+      return;
+    }
+    void playbackStore.playMedley(project, { startPreviewMs });
+  };
+
+  const formatProxyGenerationTitle = () => {
+    if (!generatingTrackProxies) {
+      return '为勾选歌曲生成可复用代理文件';
+    }
+    const { completed, total, failed, currentTrackName, cancelRequested } = proxyGenerationState;
+    return [
+      `进度: ${completed}/${total}`,
+      `失败: ${failed}`,
+      currentTrackName ? `当前: ${currentTrackName}` : '',
+      cancelRequested ? '已请求停止，当前歌曲处理完后结束' : '再次点击可停止生成'
+    ]
+      .filter(Boolean)
+      .join('\n');
+  };
+
+  const summarizeProxyError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const match =
+      message.match(/Error:\s*([^\r\n]+)/i) ??
+      message.match(/Invalid argument/i) ??
+      message.match(/unknown filter/i);
+    if (match) {
+      return typeof match[0] === 'string' ? match[0] : message;
+    }
+    const lines = message
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return lines.slice(-3).join(' | ') || message;
+  };
+
+  const handleGenerateTrackProxies = async () => {
+    if (!project) {
+      return;
+    }
+    if (generatingTrackProxies) {
+      proxyGenerationCancelRef.current = true;
+      setProxyGenerationState((state) => ({
+        ...state,
+        cancelRequested: true
+      }));
+      return;
+    }
+    const generateTrackProxiesApi = (
+      window.beatStride as typeof window.beatStride & {
+        generateTrackProxies?: typeof window.beatStride.generateTrackProxies;
+      }
+    ).generateTrackProxies;
+    if (typeof generateTrackProxiesApi !== 'function') {
+      alert('当前进程还没有加载新的代理文件接口，请完全重启应用后再试。');
+      return;
+    }
+    const checkedWorkTracks = tracks.filter(
+      (track) => track.exportEnabled && projectStore.libraryCheckedIds.includes(track.id)
     );
-    projectStore.addTracksFromFiles(probed);
+    const targetTracks =
+      checkedWorkTracks.length > 0
+        ? checkedWorkTracks
+        : selectedTrack && selectedTrack.exportEnabled
+          ? [selectedTrack]
+          : [];
+
+    if (targetTracks.length === 0) {
+      return;
+    }
+
+    let currentProject: typeof projectStore.project = project;
+    if (!currentProject.meta.filePath) {
+      await projectStore.saveProject();
+      currentProject = useProjectStore.getState().project;
+    }
+    if (!currentProject?.meta.filePath) {
+      alert('请先保存项目，再生成代理文件。');
+      return;
+    }
+    const savedProject = currentProject;
+
+    const plans = targetTracks.map((track) =>
+      buildSingleTrackExportPlan(track, {
+        globalTargetBpm: savedProject.globalTargetBpm,
+        outputDir: '',
+        format: 'mp3',
+        metronomeSamplePath: savedProject.defaultMetronomeSamplePath,
+        normalizeLoudness: false,
+        projectFilePath: savedProject.meta.filePath,
+        mixTuning: savedProject.mixTuning
+      })
+    );
+
+    proxyGenerationCancelRef.current = false;
+    setGeneratingTrackProxies(true);
+    setProxyGenerationState({
+      total: plans.length,
+      completed: 0,
+      failed: 0,
+      currentTrackName: '',
+      cancelRequested: false
+    });
+    try {
+      const results: Awaited<ReturnType<typeof generateTrackProxiesApi>> = [];
+      const failures: string[] = [];
+
+      for (const plan of plans) {
+        if (proxyGenerationCancelRef.current) {
+          break;
+        }
+
+        const previousStatus = proxyStatusByTrackId[plan.track.trackId] ?? 'missing';
+        setProxyGenerationState((state) => ({
+          ...state,
+          currentTrackName: plan.track.trackName
+        }));
+        setProxyStatusByTrackId((state) => ({
+          ...state,
+          [plan.track.trackId]: 'generating'
+        }));
+
+        try {
+          const generated = await generateTrackProxiesApi({
+            plans: [plan],
+            bitrateKbps: TRACK_PROXY_BITRATE_KBPS
+          });
+          results.push(...generated);
+          setProxyStatusByTrackId((state) => ({
+            ...state,
+            [plan.track.trackId]: 'ready'
+          }));
+        } catch (error) {
+          failures.push(`${plan.track.trackName}: ${summarizeProxyError(error)}`);
+          setProxyStatusByTrackId((state) => ({
+            ...state,
+            [plan.track.trackId]: previousStatus
+          }));
+        } finally {
+          setProxyGenerationState((state) => ({
+            ...state,
+            completed: state.completed + 1,
+            failed: failures.length
+          }));
+        }
+      }
+
+      const reusedCount = results.filter((item) => item.reused).length;
+      const createdCount = results.length - reusedCount;
+      const proxyDir = results[0]?.filePath.replace(/\\[^\\]+$/, '') ?? '';
+      const cancelled = proxyGenerationCancelRef.current;
+      alert(
+        `代理文件处理${cancelled ? '已停止' : '完成'}：新增 ${createdCount} 个，复用 ${reusedCount} 个，失败 ${failures.length} 个。${
+          proxyDir ? `\n目录：${proxyDir}` : ''
+        }${failures.length > 0 ? `\n失败示例：${failures.slice(0, 3).join('；')}` : ''}`
+      );
+    } catch (error) {
+      alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      proxyGenerationCancelRef.current = false;
+      setProxyGenerationState({
+        total: 0,
+        completed: 0,
+        failed: 0,
+        currentTrackName: '',
+        cancelRequested: false
+      });
+      setGeneratingTrackProxies(false);
+    }
+  };
+
+  const handleSeekPreview = (requestedTimeMs: number) => {
+    if (!project) {
+      return;
+    }
+    const playback = usePlaybackStore.getState();
+
+    if (playback.target === 'single') {
+      if (!selectedTrack) {
+        return;
+      }
+      const previewPlan = buildSingleTrackPreviewPlan(selectedTrack, project);
+      const durationMs =
+        playback.mode === 'original'
+          ? previewPlan.trimmedSourceDurationMs
+          : previewPlan.processedDurationMs;
+      const nextPositionMs = Math.max(0, Math.min(durationMs, Math.round(requestedTimeMs)));
+      if (playback.isPlaying) {
+        void playbackStore.playTrack(selectedTrack, project, {
+          startPreviewMs: nextPositionMs
+        });
+        return;
+      }
+      playbackStore.setPreviewPosition(nextPositionMs, selectedTrack.name, selectedTrack.id);
+      return;
+    }
+
+    const medleyPlan = buildProjectPreviewExportPlan(project);
+    const nextPositionMs = Math.max(0, Math.min(medleyPlan.durationMs, Math.round(requestedTimeMs)));
+    const currentClip =
+      medleyPlan.clips.find(
+        (clip) =>
+          nextPositionMs >= clip.timelineStartMs && nextPositionMs < clip.timelineEndMs
+      ) ?? medleyPlan.clips.at(-1);
+    const clipIndex = currentClip
+      ? medleyPlan.clips.findIndex((clip) => clip.track.trackId === currentClip.track.trackId)
+      : -1;
+    const nextLabel =
+      currentClip && clipIndex >= 0
+        ? `${clipIndex + 1}. ${currentClip.track.trackName}`
+        : '串烧试听';
+    const nextTrackId = currentClip?.track.trackId ?? null;
+
+    if (playback.isPlaying) {
+      void playbackStore.playMedley(project, {
+        startPreviewMs: nextPositionMs
+      });
+      return;
+    }
+    playbackStore.setPreviewPosition(nextPositionMs, nextLabel, nextTrackId);
   };
 
   const handleDrop: DragEventHandler<HTMLDivElement> = (event) => {
@@ -63,6 +373,75 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
     void handleImportFiles(files);
     event.currentTarget.classList.remove('drop-highlight');
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProxyStatuses = async () => {
+      if (!project) {
+        setProxyStatusByTrackId({});
+        return;
+      }
+      if (generatingTrackProxies) {
+        return;
+      }
+      const getTrackProxyStatusesApi = (
+        window.beatStride as typeof window.beatStride & {
+          getTrackProxyStatuses?: typeof window.beatStride.getTrackProxyStatuses;
+        }
+      ).getTrackProxyStatuses;
+      if (typeof getTrackProxyStatusesApi !== 'function') {
+        setProxyStatusByTrackId(
+          Object.fromEntries(
+            project.tracks
+              .filter((track) => track.exportEnabled)
+              .map((track) => [track.id, 'missing' satisfies TrackProxyStatus])
+          )
+        );
+        return;
+      }
+
+      const plans: SingleTrackExportPlan[] = project.tracks
+        .filter((track) => track.exportEnabled)
+        .map((track) =>
+          buildSingleTrackExportPlan(track, {
+            globalTargetBpm: project.globalTargetBpm,
+            outputDir: '',
+            format: 'wav',
+            metronomeSamplePath: project.defaultMetronomeSamplePath,
+            normalizeLoudness: false,
+            projectFilePath: project.meta.filePath,
+            mixTuning: project.mixTuning
+          })
+        );
+
+      if (plans.length === 0) {
+        setProxyStatusByTrackId({});
+        return;
+      }
+
+      try {
+        const results = await getTrackProxyStatusesApi({ plans });
+        if (cancelled) {
+          return;
+        }
+        setProxyStatusByTrackId(
+          Object.fromEntries(results.map((item) => [item.trackId, item.status]))
+        );
+      } catch {
+        if (!cancelled) {
+          setProxyStatusByTrackId(
+            Object.fromEntries(plans.map((plan) => [plan.track.trackId, 'missing' satisfies TrackProxyStatus]))
+          );
+        }
+      }
+    };
+
+    void loadProxyStatuses();
+    return () => {
+      cancelled = true;
+    };
+  }, [project, generatingTrackProxies]);
 
   useEffect(() => {
     if (!resizing) {
@@ -115,7 +494,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
         onOpenSettings={onOpenSettings}
         onExport={() => setShowExport(true)}
         onImport={() => void handleImportFiles()}
-        onImportFolder={() => void projectStore.addTracksFromFolder()}
+        onImportFolder={() => void handleImportFolder()}
       />
       <div
         ref={workspaceRef}
@@ -166,15 +545,22 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
             project={project}
             selectedTrack={selectedTrack}
             checkedTrackIds={projectStore.libraryCheckedIds}
+            proxyStatusByTrackId={proxyStatusByTrackId}
             playingTrackId={playbackStore.playingTrackId}
             currentTimeMs={playbackStore.currentTimeMs}
             currentLabel={playbackStore.currentLabel}
             isPlaying={playbackStore.isPlaying}
+            volume={playbackStore.volume}
             target={playbackStore.target}
             mode={playbackStore.mode}
             onSelectTarget={playbackStore.setTarget}
-            onSelectMode={playbackStore.setMode}
-            onSelectTrack={projectStore.selectTimelineTrack}
+            onSelectMode={handleSwitchMode}
+            onChangeVolume={playbackStore.setVolume}
+            onSeekPreview={handleSeekPreview}
+            onSelectTrack={(trackId) => {
+              projectStore.selectTimelineTrack(trackId);
+              projectStore.setLibraryCheckedIds([trackId]);
+            }}
             onToggleTrackCheck={projectStore.toggleLibraryCheck}
             onToggleAllQueueChecked={(checked) =>
               projectStore.setLibraryCheckedIds(
@@ -183,20 +569,30 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
             }
             onPlaySingle={() => {
               if (selectedTrack && project) {
-                void playbackStore.playTrack(selectedTrack, project);
+                void playbackStore.playTrack(selectedTrack, project, {
+                  startPreviewMs: playbackStore.currentTimeMs
+                });
               }
             }}
             onPlayMedley={() => {
               if (project) {
-                void playbackStore.playMedley(project);
+                void playbackStore.playMedley(project, {
+                  startPreviewMs: playbackStore.currentTimeMs
+                });
               }
             }}
             onStop={playbackStore.stop}
-            onMoveSelectedTrack={(direction) => {
-              if (selectedTrack) {
-                projectStore.moveTrack(selectedTrack.id, direction);
-              }
-            }}
+            onReorderTrack={projectStore.reorderWorkTrack}
+            onGenerateTrackProxies={() => void handleGenerateTrackProxies()}
+            generatingTrackProxies={generatingTrackProxies}
+            proxyGenerationButtonLabel={
+              generatingTrackProxies
+                ? proxyGenerationState.cancelRequested
+                  ? '停止中...'
+                  : '停止生成'
+                : '生成代理文件'
+            }
+            proxyGenerationButtonTitle={formatProxyGenerationTitle()}
             onRemoveCheckedFromQueue={() =>
               projectStore.setTracksWorkEnabled(
                 tracks.filter(
@@ -225,26 +621,16 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
       {showExport && project && (
         <ExportPanel project={project} selectedTrack={selectedTrack} onClose={() => setShowExport(false)} />
       )}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 8,
-          left: 14,
-          color: 'var(--text-subtle)',
-          fontSize: 12
-        }}
-      >
-        {projectStore.dirty ? t('status.processing') : t('status.ready')}
+      <div className="status-chip status-chip-left">
+        {importing
+          ? '分析 BPM 中'
+          : generatingTrackProxies
+            ? `生成代理文件 ${proxyGenerationState.completed}/${proxyGenerationState.total}`
+            : projectStore.dirty
+              ? t('status.processing')
+              : t('status.ready')}
       </div>
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 8,
-          right: 14,
-          color: 'var(--text-subtle)',
-          fontSize: 12
-        }}
-      >
+      <div className="status-chip status-chip-right">
         {exportStore.jobs[0]?.status ?? t('status.ready')}
       </div>
     </>
@@ -321,24 +707,7 @@ export function App() {
         onLanguageChange={(language) => void settingsStore.setLanguage(language)}
       >
         <div className={`app-shell ${pageMode === 'welcome' ? 'welcome-mode' : ''}`}>
-          {bootError && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 10,
-                right: 10,
-                zIndex: 99,
-                maxWidth: 460,
-                border: '1px solid var(--danger)',
-                borderRadius: 10,
-                background: 'var(--bg-elevated)',
-                color: 'var(--danger)',
-                padding: '8px 10px'
-              }}
-            >
-              {bootError}
-            </div>
-          )}
+          {bootError && <div className="boot-error">{bootError}</div>}
           {pageMode === 'welcome' ? (
             <WelcomePage
               settings={settingsStore.settings}

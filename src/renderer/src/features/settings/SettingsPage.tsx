@@ -282,6 +282,22 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                 }
               />
             </label>
+            <label className="field">
+              <span>开发者模式</span>
+              <div className="path-field-row">
+                <div className="muted" style={{ alignSelf: 'center' }}>
+                  开启后允许使用 F12 / Ctrl+Shift+I，并自动打开浏览器开发者工具。
+                </div>
+                <input
+                  type="checkbox"
+                  style={{ width: 'auto', justifySelf: 'end' }}
+                  checked={settings.developerMode}
+                  onChange={(event) =>
+                    void settingsStore.patchSettings({ developerMode: event.target.checked })
+                  }
+                />
+              </div>
+            </label>
           </div>
         </div>
         <div

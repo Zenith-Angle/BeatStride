@@ -31,7 +31,9 @@ function bootstrap(): void {
     defaultMetronomeSamplePath: nextMetronomePath
   });
   setupAppMenu(saved.language);
-  createMainWindow();
+  createMainWindow({
+    isDeveloperModeEnabled: () => settingsService.load().developerMode
+  });
 }
 
 app.whenReady().then(() => {
@@ -39,7 +41,9 @@ app.whenReady().then(() => {
 
   app.on('activate', () => {
     if (app.isReady() && BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+      createMainWindow({
+        isDeveloperModeEnabled: () => settingsService.load().developerMode
+      });
     }
   });
 });

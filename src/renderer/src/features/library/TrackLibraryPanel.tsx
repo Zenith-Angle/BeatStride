@@ -48,7 +48,9 @@ export function TrackLibraryPanel({
               </div>
               <div className="left-song-list">
                 {tracks.length === 0 ? (
-                  <p className="muted">{t('library.empty')}</p>
+                  <div className="library-empty-state">
+                    <p className="muted">{t('library.empty')}</p>
+                  </div>
                 ) : (
                   tracks.map((track) => {
                     const selected = checkedTrackIds.includes(track.id);

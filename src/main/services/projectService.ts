@@ -3,6 +3,9 @@ import path from 'node:path';
 import { app, dialog } from 'electron';
 import {
   DEFAULT_EXPORT_PRESET,
+  LEGACY_DEFAULT_METRONOME_SAMPLE_PATH,
+  DEFAULT_MIX_TUNING,
+  DEFAULT_METRONOME_SAMPLE_PATH,
   DEFAULT_LANGUAGE,
   DEFAULT_THEME,
   DEFAULT_TIME_SIGNATURE,
@@ -13,17 +16,33 @@ import type { ProjectFile } from '@shared/types';
 
 const RECOVERY_FILE = 'project.recovery.json';
 
+function resolveDefaultMetronomePath(candidate?: string): string {
+  if (candidate && fs.existsSync(candidate)) {
+    return candidate;
+  }
+  if (
+    candidate === LEGACY_DEFAULT_METRONOME_SAMPLE_PATH &&
+    fs.existsSync(DEFAULT_METRONOME_SAMPLE_PATH)
+  ) {
+    return DEFAULT_METRONOME_SAMPLE_PATH;
+  }
+  if (fs.existsSync(DEFAULT_METRONOME_SAMPLE_PATH)) {
+    return DEFAULT_METRONOME_SAMPLE_PATH;
+  }
+  return '';
+}
+
 export function createEmptyProject(): ProjectFile {
   const now = new Date().toISOString();
-  const defaultMetronomeSamplePath = path.join(
+  const bundledMetronomeSamplePath = path.join(
     app.getAppPath(),
     'resources',
     'metronome',
     '180BPM.mp3'
   );
-  const metronomePath = fs.existsSync(defaultMetronomeSamplePath)
-    ? defaultMetronomeSamplePath
-    : '';
+  const metronomePath =
+    resolveDefaultMetronomePath(DEFAULT_METRONOME_SAMPLE_PATH) ||
+    resolveDefaultMetronomePath(bundledMetronomeSamplePath);
 
   return {
     version: PROJECT_VERSION,
@@ -41,6 +60,9 @@ export function createEmptyProject(): ProjectFile {
     tracks: [],
     exportPreset: {
       ...DEFAULT_EXPORT_PRESET
+    },
+    mixTuning: {
+      ...DEFAULT_MIX_TUNING
     }
   };
 }
@@ -96,6 +118,18 @@ export class ProjectService {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(raw) as ProjectFile;
     parsed.meta.filePath = filePath;
+    parsed.defaultMetronomeSamplePath = resolveDefaultMetronomePath(
+      parsed.defaultMetronomeSamplePath
+    );
+    if (
+      parsed.defaultMetronomeSamplePath === DEFAULT_METRONOME_SAMPLE_PATH &&
+      parsed.mixTuning?.beatRenderMode === 'crisp-click'
+    ) {
+      parsed.mixTuning = {
+        ...parsed.mixTuning,
+        beatRenderMode: 'stretched-file'
+      };
+    }
     return parsed;
   }
 

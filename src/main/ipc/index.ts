@@ -1,4 +1,4 @@
-import { dialog, ipcMain, shell } from 'electron';
+import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
@@ -15,9 +15,19 @@ import {
 } from '@main/services/projectService';
 import { detectFfmpegBinaries } from '@main/services/ffmpegBinaryService';
 import { probeAudioMetadata } from '@main/services/ffprobeService';
-import { exportMedley, exportSingleTrack } from '@main/services/ffmpegService';
+import { detectTempo } from '@main/services/tempoDetectionService';
+import { preparePlaybackPayload } from '@main/services/playbackProxyService';
+import {
+  exportMedley,
+  exportSingleTrack,
+  generateTrackProxies,
+  getTrackProxyStatuses,
+  renderMedleyPreviewPayload,
+  renderSinglePreviewPayload
+} from '@main/services/ffmpegService';
 import { ExportQueueService } from '@main/services/exportQueueService';
 import { setupAppMenu } from '@main/menu';
+import { applyDeveloperTools } from '@main/window';
 
 const settingsService = new SettingsService();
 const projectService = new ProjectService();
@@ -30,6 +40,13 @@ export function registerIpcHandlers(): void {
     const next = settingsService.patch(partial);
     if (partial?.language) {
       setupAppMenu(next.language);
+    }
+    if (typeof partial?.developerMode === 'boolean') {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          applyDeveloperTools(window, partial.developerMode as boolean);
+        }
+      });
     }
     return next;
   });
@@ -144,8 +161,17 @@ export function registerIpcHandlers(): void {
       return null;
     }
     const project = createEmptyProject();
+    const settings = settingsService.load();
     const dirName = path.basename(dirPath);
     project.meta.name = dirName || project.meta.name;
+    project.globalTargetBpm = settings.defaultTargetBpm || project.globalTargetBpm;
+    project.mixTuning.loudnormEnabled =
+      settings.normalizeLoudnessByDefault ?? project.mixTuning.loudnormEnabled;
+    project.exportPreset.outputDir =
+      settings.defaultExportDir || project.exportPreset.outputDir;
+    if (settings.defaultMetronomeSamplePath) {
+      project.defaultMetronomeSamplePath = settings.defaultMetronomeSamplePath;
+    }
     const filePath = projectService.generateProjectFilePath(
       dirPath,
       dirName || 'beatstride-project'
@@ -214,6 +240,71 @@ export function registerIpcHandlers(): void {
     }
     return probeAudioMetadata(settings.ffmpeg.ffprobePath, filePath);
   });
+
+  ipcMain.handle(
+    IPC_CHANNELS.audioDetectTempo,
+    async (_, payload: { filePath: string; analysisSeconds: number }) => {
+      const settings = settingsService.load();
+      if (!settings.ffmpeg.available || !settings.ffmpeg.ffmpegPath) {
+        throw new Error('ffmpeg not available');
+      }
+      return detectTempo(
+        settings.ffmpeg.ffmpegPath,
+        payload.filePath,
+        payload.analysisSeconds
+      );
+    }
+  );
+
+  ipcMain.handle(IPC_CHANNELS.audioPreparePlayback, async (_, filePath: string) => {
+    const settings = settingsService.load();
+    if (!settings.ffmpeg.available || !settings.ffmpeg.ffmpegPath) {
+      throw new Error('ffmpeg not available');
+    }
+    return preparePlaybackPayload(settings.ffmpeg.ffmpegPath, filePath);
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.audioPrepareSinglePreview,
+    async (_, payload: { plan: SingleTrackExportPlan; mode: 'original' | 'processed' | 'metronome' }) => {
+      const settings = settingsService.load();
+      if (!settings.ffmpeg.available || !settings.ffmpeg.ffmpegPath) {
+        throw new Error('ffmpeg not available');
+      }
+      return renderSinglePreviewPayload(settings.ffmpeg.ffmpegPath, payload.plan, payload.mode);
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.audioPrepareMedleyPreview,
+    async (_, payload: { plan: MedleyExportPlan; mode: 'processed' | 'metronome' }) => {
+      const settings = settingsService.load();
+      if (!settings.ffmpeg.available || !settings.ffmpeg.ffmpegPath) {
+        throw new Error('ffmpeg not available');
+      }
+      return renderMedleyPreviewPayload(settings.ffmpeg.ffmpegPath, payload.plan, payload.mode);
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.audioGenerateTrackProxies,
+    async (_, payload: { plans: SingleTrackExportPlan[]; bitrateKbps?: number }) => {
+      const settings = settingsService.load();
+      if (!settings.ffmpeg.available || !settings.ffmpeg.ffmpegPath) {
+        throw new Error('ffmpeg not available');
+      }
+      return generateTrackProxies(
+        settings.ffmpeg.ffmpegPath,
+        payload.plans,
+        { bitrateKbps: payload.bitrateKbps }
+      );
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.audioGetTrackProxyStatuses,
+    async (_, payload: { plans: SingleTrackExportPlan[] }) => getTrackProxyStatuses(payload.plans)
+  );
 
   ipcMain.handle(
     IPC_CHANNELS.exportSingle,

@@ -1,23 +1,37 @@
 import type { Track } from '@shared/types';
 import { useI18n } from '@renderer/features/i18n/I18nProvider';
 import { useTapTempo } from '@renderer/hooks/useTapTempo';
+import { alignMetronomeToDownbeat } from '@shared/services/alignmentService';
 
 interface AlignmentPanelProps {
   track: Track;
+  globalTargetBpm: number;
   onUpdate: (patch: Partial<Track>) => void;
+  onAnalyzeTempo?: () => void | Promise<void>;
+  analyzingTempo?: boolean;
 }
 
-export function AlignmentPanel({ track, onUpdate }: AlignmentPanelProps) {
+export function AlignmentPanel({
+  track,
+  globalTargetBpm,
+  onUpdate,
+  onAnalyzeTempo,
+  analyzingTempo = false
+}: AlignmentPanelProps) {
   const { t } = useI18n();
   const { bpm, tap, reset } = useTapTempo();
+  const aligned = alignMetronomeToDownbeat(track, {
+    globalTargetBpm,
+    harmonicMappingEnabled: true
+  });
 
   const nudge = (deltaMs: number) => {
     onUpdate({ metronomeOffsetMs: track.metronomeOffsetMs + deltaMs });
   };
 
-  const beatMs = 60000 / (track.targetBpm ?? track.sourceBpm);
+  const beatMs = 60000 / aligned.targetBpm;
   return (
-    <div className="panel-content no-drag" style={{ borderTop: '1px solid var(--line)' }}>
+    <div className="panel-content no-drag alignment-panel">
       <h4>{t('alignment.title')}</h4>
       <div className="properties-grid">
         <label className="field inline">
@@ -33,7 +47,7 @@ export function AlignmentPanel({ track, onUpdate }: AlignmentPanelProps) {
           <input
             type="number"
             value={track.targetBpm ?? ''}
-            placeholder={String(track.sourceBpm)}
+            placeholder={String(aligned.targetBpm)}
             onChange={(event) =>
               onUpdate({
                 targetBpm: event.target.value ? Number(event.target.value) : undefined
@@ -62,7 +76,7 @@ export function AlignmentPanel({ track, onUpdate }: AlignmentPanelProps) {
           />
         </label>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 8 }}>
+      <div className="alignment-action-grid">
         <button onClick={() => nudge(-beatMs)}>{t('alignment.nudgeBeatLeft')}</button>
         <button onClick={() => nudge(beatMs)}>{t('alignment.nudgeBeatRight')}</button>
         <button onClick={() => nudge(-beatMs / 2)}>{t('alignment.nudgeHalfLeft')}</button>
@@ -72,7 +86,10 @@ export function AlignmentPanel({ track, onUpdate }: AlignmentPanelProps) {
         <button onClick={() => nudge(-50)}>{t('alignment.nudge50msLeft')}</button>
         <button onClick={() => nudge(50)}>{t('alignment.nudge50msRight')}</button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 8 }}>
+      <div className="alignment-action-grid compact">
+        <button onClick={() => void onAnalyzeTempo?.()} disabled={analyzingTempo}>
+          {analyzingTempo ? '分析中...' : '重新分析 BPM'}
+        </button>
         <button onClick={tap}>{t('alignment.tapTempo')}</button>
         <button
           onClick={() => {
@@ -85,7 +102,7 @@ export function AlignmentPanel({ track, onUpdate }: AlignmentPanelProps) {
           {t('common.apply')}
         </button>
       </div>
-      {bpm && <p className="muted">{bpm} BPM</p>}
+      {bpm && <p className="muted alignment-result">{bpm} BPM</p>}
     </div>
   );
 }

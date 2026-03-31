@@ -1,7 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
-import { DEFAULT_SETTINGS } from '@shared/constants';
+import {
+  DEFAULT_METRONOME_SAMPLE_PATH,
+  DEFAULT_SETTINGS,
+  LEGACY_DEFAULT_METRONOME_SAMPLE_PATH
+} from '@shared/constants';
 import type { AppSettings } from '@shared/types';
 
 const SETTINGS_FILE = 'settings.json';
@@ -38,6 +42,13 @@ export class SettingsService {
       recentProjectPaths:
         parsed.recentProjectPaths ?? DEFAULT_SETTINGS.recentProjectPaths
     };
+    if (
+      (!this.cache.defaultMetronomeSamplePath ||
+        this.cache.defaultMetronomeSamplePath === LEGACY_DEFAULT_METRONOME_SAMPLE_PATH) &&
+      fs.existsSync(DEFAULT_METRONOME_SAMPLE_PATH)
+    ) {
+      this.cache.defaultMetronomeSamplePath = DEFAULT_METRONOME_SAMPLE_PATH;
+    }
     return this.cache;
   }
 

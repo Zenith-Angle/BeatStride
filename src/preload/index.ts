@@ -20,6 +20,18 @@ const api: BeatStrideApi = {
   saveRecovery: (project) => ipcRenderer.invoke(IPC_CHANNELS.projectSaveRecovery, project),
   loadRecovery: () => ipcRenderer.invoke(IPC_CHANNELS.projectLoadRecovery),
   probeAudio: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.audioProbe, filePath),
+  detectTempo: (filePath, analysisSeconds) =>
+    ipcRenderer.invoke(IPC_CHANNELS.audioDetectTempo, { filePath, analysisSeconds }),
+  preparePlaybackAudio: (filePath) =>
+    ipcRenderer.invoke(IPC_CHANNELS.audioPreparePlayback, filePath),
+  prepareSinglePreviewAudio: (payload) =>
+    ipcRenderer.invoke(IPC_CHANNELS.audioPrepareSinglePreview, payload),
+  prepareMedleyPreviewAudio: (payload) =>
+    ipcRenderer.invoke(IPC_CHANNELS.audioPrepareMedleyPreview, payload),
+  generateTrackProxies: (payload) =>
+    ipcRenderer.invoke(IPC_CHANNELS.audioGenerateTrackProxies, payload),
+  getTrackProxyStatuses: (payload) =>
+    ipcRenderer.invoke(IPC_CHANNELS.audioGetTrackProxyStatuses, payload),
   runSingleExport: (payload) => ipcRenderer.invoke(IPC_CHANNELS.exportSingle, payload),
   runMedleyExport: (payload) => ipcRenderer.invoke(IPC_CHANNELS.exportMedley, payload),
   onExportProgress: (listener) => {

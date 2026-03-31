@@ -2,6 +2,12 @@ import { create } from 'zustand';
 import type { AudioProbeInfo, ProjectFile, Track } from '@shared/types';
 import { AUTO_SAVE_INTERVAL_MS } from '@shared/constants';
 import { computeSpeedRatio } from '@shared/utils/tempo';
+import {
+  DEFAULT_EXPORT_PRESET,
+  LEGACY_DEFAULT_METRONOME_SAMPLE_PATH,
+  DEFAULT_METRONOME_SAMPLE_PATH,
+  DEFAULT_MIX_TUNING
+} from '@shared/constants';
 
 interface ProjectState {
   project: ProjectFile | null;
@@ -18,7 +24,9 @@ interface ProjectState {
   saveProject: () => Promise<void>;
   saveProjectAs: () => Promise<void>;
   loadRecovery: () => Promise<void>;
-  addTracksFromFiles: (items: Array<{ filePath: string; probe: AudioProbeInfo }>) => void;
+  addTracksFromFiles: (
+    items: Array<{ filePath: string; probe: AudioProbeInfo; detectedBpm?: number }>
+  ) => void;
   addTracksFromFolder: () => Promise<void>;
   patchProject: (patch: Partial<ProjectFile>) => void;
   updateTrack: (trackId: string, patch: Partial<Track>) => void;
@@ -30,6 +38,11 @@ interface ProjectState {
   setTracksWorkEnabled: (trackIds: string[], enabled: boolean) => void;
   setCheckedMedleyEnabled: (enabled: boolean) => void;
   moveTrack: (trackId: string, direction: 'up' | 'down') => void;
+  reorderWorkTrack: (
+    trackId: string,
+    targetTrackId: string,
+    placement: 'before' | 'after'
+  ) => void;
   selectTimelineTrack: (trackId: string | null) => void;
   undo: () => void;
   redo: () => void;
@@ -42,8 +55,32 @@ function cloneProject(project: ProjectFile): ProjectFile {
 }
 
 function normalizeProject(project: ProjectFile): ProjectFile {
+  const defaultMetronomeSamplePath =
+    !project.defaultMetronomeSamplePath ||
+    project.defaultMetronomeSamplePath === LEGACY_DEFAULT_METRONOME_SAMPLE_PATH
+      ? DEFAULT_METRONOME_SAMPLE_PATH
+      : project.defaultMetronomeSamplePath;
+  const mixTuning = {
+    ...DEFAULT_MIX_TUNING,
+    ...(project.mixTuning ?? {}),
+    loudnormEnabled:
+      project.mixTuning?.loudnormEnabled ?? project.exportPreset?.normalizeLoudness ?? true
+  };
+  if (
+    defaultMetronomeSamplePath === DEFAULT_METRONOME_SAMPLE_PATH &&
+    mixTuning.beatRenderMode === 'crisp-click'
+  ) {
+    mixTuning.beatRenderMode = 'stretched-file';
+  }
+
   return {
     ...project,
+    defaultMetronomeSamplePath,
+    exportPreset: {
+      ...DEFAULT_EXPORT_PRESET,
+      ...(project.exportPreset ?? {})
+    },
+    mixTuning,
     tracks: project.tracks.map((track) => ({
       ...track,
       inTimeline: Boolean(track.inTimeline || track.exportEnabled),
@@ -175,10 +212,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         durationMs: item.probe.durationMs,
         sampleRate: item.probe.sampleRate,
         channels: item.probe.channels,
-        detectedBpm: undefined,
-        sourceBpm,
+        detectedBpm: item.detectedBpm,
+        sourceBpm: item.detectedBpm || sourceBpm,
         targetBpm: undefined,
-        speedRatio: 1,
+        speedRatio: computeSpeedRatio(item.detectedBpm || sourceBpm, sourceBpm),
         downbeatOffsetMs: 0,
         metronomeOffsetMs: 0,
         trackStartMs: 0,
@@ -228,12 +265,23 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return;
     }
     const prev = cloneProject(state.project);
+    const merged = normalizeProject({
+      ...state.project,
+      ...patch,
+      meta: { ...state.project.meta, updatedAt: new Date().toISOString() }
+    });
+    const targetBpmChanged =
+      patch.globalTargetBpm !== undefined &&
+      patch.globalTargetBpm !== state.project.globalTargetBpm;
     set({
-      project: {
-        ...state.project,
-        ...patch,
-        meta: { ...state.project.meta, updatedAt: new Date().toISOString() }
-      },
+      project: targetBpmChanged
+        ? {
+            ...merged,
+            tracks: merged.tracks.map((track) =>
+              applyTrackPatch(track, {}, merged.globalTargetBpm)
+            )
+          }
+        : merged,
       undoStack: [...state.undoStack, prev].slice(-50),
       redoStack: [],
       dirty: true
@@ -383,6 +431,46 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       project: {
         ...state.project,
         tracks: nextTracks,
+        meta: { ...state.project.meta, updatedAt: new Date().toISOString() }
+      },
+      undoStack: [...state.undoStack, prev].slice(-50),
+      redoStack: [],
+      dirty: true
+    });
+  },
+  reorderWorkTrack: (trackId, targetTrackId, placement) => {
+    const state = get();
+    if (!state.project || trackId === targetTrackId) {
+      return;
+    }
+    const workTracks = state.project.tracks.filter((track) => track.exportEnabled);
+    const sourceIndex = workTracks.findIndex((track) => track.id === trackId);
+    const rawTargetIndex = workTracks.findIndex((track) => track.id === targetTrackId);
+    if (sourceIndex < 0 || rawTargetIndex < 0) {
+      return;
+    }
+
+    const prev = cloneProject(state.project);
+    const nextWorkTracks = [...workTracks];
+    const [draggedTrack] = nextWorkTracks.splice(sourceIndex, 1);
+    if (!draggedTrack) {
+      return;
+    }
+
+    let targetIndex = nextWorkTracks.findIndex((track) => track.id === targetTrackId);
+    if (targetIndex < 0) {
+      targetIndex = nextWorkTracks.length;
+    }
+    if (placement === 'after') {
+      targetIndex += 1;
+    }
+    nextWorkTracks.splice(Math.max(0, Math.min(targetIndex, nextWorkTracks.length)), 0, draggedTrack);
+
+    const pendingTracks = state.project.tracks.filter((item) => !item.exportEnabled);
+    set({
+      project: {
+        ...state.project,
+        tracks: [...pendingTracks, ...nextWorkTracks],
         meta: { ...state.project.meta, updatedAt: new Date().toISOString() }
       },
       undoStack: [...state.undoStack, prev].slice(-50),

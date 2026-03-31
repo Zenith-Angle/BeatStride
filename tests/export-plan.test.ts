@@ -3,6 +3,7 @@ import {
   buildMedleyExportPlan,
   buildSingleTrackExportPlan
 } from '../src/shared/services/exportPlanService';
+import { DEFAULT_MIX_TUNING } from '../src/shared/constants';
 import { buildOutputFileName } from '../src/shared/utils/fileName';
 import type { ProjectFile, Track } from '../src/shared/types';
 
@@ -35,13 +36,56 @@ const track: Track = {
 describe('buildSingleTrackExportPlan', () => {
   test('creates render plan with beat points', () => {
     const plan = buildSingleTrackExportPlan(track, {
+      globalTargetBpm: 180,
       outputDir: 'C:/exports',
       format: 'wav',
       metronomeSamplePath: 'C:/click.wav',
-      normalizeLoudness: false
+      normalizeLoudness: false,
+      mixTuning: DEFAULT_MIX_TUNING
     });
     expect(plan.track.processedDurationMs).toBeGreaterThan(0);
     expect(plan.track.beatTimesMs.length).toBeGreaterThan(0);
+  });
+
+  test('falls back to project target bpm when track target bpm is empty', () => {
+    const plan = buildSingleTrackExportPlan(
+      {
+        ...track,
+        targetBpm: undefined
+      },
+      {
+        globalTargetBpm: 180,
+        outputDir: 'C:/exports',
+        format: 'wav',
+        metronomeSamplePath: 'C:/click.wav',
+        normalizeLoudness: false,
+        mixTuning: DEFAULT_MIX_TUNING
+      }
+    );
+
+    expect(plan.track.targetBpm).toBe(180);
+  });
+
+  test('keeps metronome bpm at global target when comfort target drops music to 120', () => {
+    const plan = buildSingleTrackExportPlan(
+      {
+        ...track,
+        sourceBpm: 110,
+        detectedBpm: 110,
+        targetBpm: undefined
+      },
+      {
+        globalTargetBpm: 180,
+        outputDir: 'C:/exports',
+        format: 'wav',
+        metronomeSamplePath: 'C:/click.wav',
+        normalizeLoudness: false,
+        mixTuning: DEFAULT_MIX_TUNING
+      }
+    );
+
+    expect(plan.track.targetBpm).toBe(120);
+    expect(plan.track.metronomeBpm).toBe(180);
   });
 });
 
@@ -71,15 +115,20 @@ describe('buildMedleyExportPlan', () => {
         normalizeLoudness: false,
         gapMs: 0,
         crossfadeMs: 0
+      },
+      mixTuning: {
+        ...DEFAULT_MIX_TUNING
       }
     };
     const plan = buildMedleyExportPlan(project, {
+      globalTargetBpm: project.globalTargetBpm,
       outputDir: 'C:/exports',
       format: 'mp3',
       metronomeSamplePath: '',
       normalizeLoudness: false,
       gapMs: 300,
-      crossfadeMs: 200
+      crossfadeMs: 200,
+      mixTuning: project.mixTuning
     });
     expect(plan.clips).toHaveLength(1);
   });

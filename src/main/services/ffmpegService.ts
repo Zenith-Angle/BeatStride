@@ -1,14 +1,26 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
 import { app } from 'electron';
-import type { MedleyExportPlan, SingleTrackExportPlan } from '@shared/types';
+import type {
+  GeneratedTrackProxy,
+  MedleyExportPlan,
+  PreparedPlaybackAudio,
+  ResolvedStretchEngine,
+  SingleTrackExportPlan,
+  TrackProxyStatusResult,
+  TrackRenderPlan
+} from '@shared/types';
+import { PROJECT_PROXY_DIRNAME } from '@shared/constants';
 import {
+  buildAtempoFilter,
   buildMedleyMixFilter,
   buildOutputCodecArgs,
   buildSingleTrackFilterGraph
 } from '@shared/services/ffmpegArgsBuilder';
+import { generateBeatTimes } from '@shared/services/beatGridService';
 import { msToSec } from '@shared/utils/time';
 
 export interface FfmpegProgress {
@@ -16,6 +28,11 @@ export interface FfmpegProgress {
   timeMs: number;
   logLine: string;
 }
+
+const filterSupportCache = new Map<string, Map<string, boolean>>();
+const FILTER_SCRIPT_THRESHOLD = 4000;
+const TRACK_PROXY_BITRATE_KBPS = 160;
+const PREVIEW_BITRATE_KBPS = 160;
 
 function parseFfmpegTimeToMs(timeString: string): number {
   const [hh, mm, ss] = timeString.split(':');
@@ -25,6 +42,170 @@ function parseFfmpegTimeToMs(timeString: string): number {
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
+}
+
+function createFilterGraphArgs(
+  graph: string,
+  tempDir: string,
+  prefix: string
+): {
+  args: string[];
+  cleanup: () => void;
+} {
+  if (graph.length <= FILTER_SCRIPT_THRESHOLD) {
+    return {
+      args: ['-filter_complex', graph],
+      cleanup: () => undefined
+    };
+  }
+
+  ensureDir(tempDir);
+  const scriptPath = path.join(
+    tempDir,
+    `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`
+  );
+  fs.writeFileSync(scriptPath, graph, 'utf-8');
+  return {
+    args: ['-filter_complex_script', scriptPath],
+    cleanup: () => {
+      fs.rmSync(scriptPath, { force: true });
+    }
+  };
+}
+
+function sanitizeFileName(value: string): string {
+  return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim() || 'track';
+}
+
+function getPreviewCacheDir(kind: 'single' | 'medley'): string {
+  const dir = path.join(app.getPath('userData'), 'preview-cache', kind);
+  ensureDir(dir);
+  return dir;
+}
+
+function buildFileStatSignature(filePath?: string): Record<string, number | string | null> {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { path: filePath ?? null, size: null, mtimeMs: null };
+  }
+  const stat = fs.statSync(filePath);
+  return {
+    path: path.resolve(filePath),
+    size: stat.size,
+    mtimeMs: stat.mtimeMs
+  };
+}
+
+function createPreparedAudioPayload(filePath: string): PreparedPlaybackAudio {
+  const buffer = fs.readFileSync(filePath);
+  return {
+    mimeType: 'audio/mpeg',
+    fileName: path.basename(filePath),
+    base64Data: buffer.toString('base64')
+  };
+}
+
+function buildTrackProxySignature(plan: SingleTrackExportPlan): string {
+  const sourceStat = fs.statSync(plan.track.sourceFilePath);
+  return createHash('sha1')
+    .update(
+      JSON.stringify({
+        sourceFilePath: path.resolve(plan.track.sourceFilePath),
+        sourceSize: sourceStat.size,
+        sourceMtimeMs: sourceStat.mtimeMs,
+        proxyFormat: 'mp3',
+        sampleRate: 44100,
+        channels: 2,
+        bitrateKbps: TRACK_PROXY_BITRATE_KBPS
+      })
+    )
+    .digest('hex');
+}
+
+function getProjectProxyDir(projectFilePath?: string): string | null {
+  if (!projectFilePath) {
+    return null;
+  }
+  return path.join(path.dirname(projectFilePath), PROJECT_PROXY_DIRNAME);
+}
+
+function buildProjectProxyPath(projectFilePath: string, plan: SingleTrackExportPlan): string {
+  const signature = buildTrackProxySignature(plan);
+  const baseName = sanitizeFileName(plan.track.trackName);
+  return path.join(
+    getProjectProxyDir(projectFilePath) ?? path.dirname(projectFilePath),
+    `${plan.track.trackId}__${baseName}__${signature.slice(0, 12)}.mp3`
+  );
+}
+
+function cleanupStaleTrackProxies(projectFilePath: string, trackId: string, keepPath: string): void {
+  const proxyDir = getProjectProxyDir(projectFilePath);
+  if (!proxyDir || !fs.existsSync(proxyDir)) {
+    return;
+  }
+  const prefix = `${trackId}__`;
+  for (const entry of fs.readdirSync(proxyDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.startsWith(prefix)) {
+      continue;
+    }
+    const candidate = path.join(proxyDir, entry.name);
+    if (candidate !== keepPath) {
+      fs.rmSync(candidate, { force: true });
+    }
+  }
+}
+
+function tryReuseProjectProxy(plan: SingleTrackExportPlan): string | null {
+  if (!plan.projectFilePath) {
+    return null;
+  }
+  const proxyPath = buildProjectProxyPath(plan.projectFilePath, plan);
+  return fs.existsSync(proxyPath) ? proxyPath : null;
+}
+
+function hasAnyTrackProxy(projectFilePath: string, trackId: string): boolean {
+  const proxyDir = getProjectProxyDir(projectFilePath);
+  if (!proxyDir || !fs.existsSync(proxyDir)) {
+    return false;
+  }
+  const prefix = `${trackId}__`;
+  return fs.readdirSync(proxyDir, { withFileTypes: true }).some(
+    (entry) => entry.isFile() && entry.name.startsWith(prefix)
+  );
+}
+
+function ffmpegHasFilter(ffmpegPath: string, filterName: string): boolean {
+  const byBinary = filterSupportCache.get(ffmpegPath) ?? new Map<string, boolean>();
+  if (byBinary.has(filterName)) {
+    return byBinary.get(filterName) ?? false;
+  }
+
+  const completed = spawnSync(ffmpegPath, ['-hide_banner', '-h', `filter=${filterName}`], {
+    windowsHide: true,
+    encoding: 'utf-8'
+  });
+  const text = `${completed.stdout ?? ''}\n${completed.stderr ?? ''}`.toLowerCase();
+  const supported = !text.includes('unknown filter') && completed.status === 0;
+  byBinary.set(filterName, supported);
+  filterSupportCache.set(ffmpegPath, byBinary);
+  return supported;
+}
+
+function resolveStretchEngine(
+  ffmpegPath: string,
+  requested: SingleTrackExportPlan['renderOptions']['stretchEngine']
+): ResolvedStretchEngine {
+  if (requested === 'rubberband') {
+    if (!ffmpegHasFilter(ffmpegPath, 'rubberband')) {
+      throw new Error('当前 ffmpeg 未启用 rubberband，无法使用该变速引擎。');
+    }
+    return 'rubberband';
+  }
+
+  if (requested === 'auto') {
+    return ffmpegHasFilter(ffmpegPath, 'rubberband') ? 'rubberband' : 'atempo';
+  }
+
+  return 'atempo';
 }
 
 async function runFfmpeg(
@@ -53,7 +234,13 @@ async function runFfmpeg(
         }
       }
     });
-    child.on('error', (error) => reject(error));
+    child.on('error', (error) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENAMETOOLONG') {
+        reject(new Error('ffmpeg 命令长度超限，已尝试缩短滤镜参数但仍然失败。'));
+        return;
+      }
+      reject(error);
+    });
     child.on('close', (code) => {
       if (code === 0) {
         resolve();
@@ -69,6 +256,7 @@ async function createSilence(
   durationMs: number,
   outputPath: string
 ): Promise<void> {
+  const safeDurationMs = Math.max(1, durationMs);
   const args = [
     '-y',
     '-f',
@@ -76,12 +264,153 @@ async function createSilence(
     '-i',
     'anullsrc=r=48000:cl=stereo',
     '-t',
-    `${msToSec(durationMs)}`,
+    `${msToSec(safeDurationMs)}`,
     '-c:a',
     'pcm_s16le',
     outputPath
   ];
-  await runFfmpeg(ffmpegPath, args, durationMs);
+  await runFfmpeg(ffmpegPath, args, safeDurationMs);
+}
+
+async function renderMaterialProxy(
+  ffmpegPath: string,
+  sourceFilePath: string,
+  outputPath: string,
+  totalMs: number,
+  bitrateKbps: number
+): Promise<void> {
+  await runFfmpeg(
+    ffmpegPath,
+    [
+      '-y',
+      '-i',
+      sourceFilePath,
+      '-vn',
+      '-map',
+      '0:a:0',
+      '-ac',
+      '2',
+      '-ar',
+      '44100',
+      '-c:a',
+      'libmp3lame',
+      '-b:a',
+      `${bitrateKbps}k`,
+      outputPath
+    ],
+    Math.max(1, totalMs)
+  );
+}
+
+function buildPreviewBeatTimes(
+  track: TrackRenderPlan
+): number[] {
+  return generateBeatTimes(
+    track.processedDurationMs,
+    track.metronomeBpm,
+    track.metronomeStartMs
+  );
+}
+
+function buildSinglePreviewPlan(
+  plan: SingleTrackExportPlan,
+  mode: 'original' | 'processed' | 'metronome'
+): SingleTrackExportPlan {
+  if (mode === 'original') {
+    return {
+      ...plan,
+      track: {
+        ...plan.track,
+        speedRatio: 1,
+        processedDurationMs: plan.track.trimmedSourceDurationMs,
+        beatTimesMs: [],
+        metronomeEnabled: false
+      }
+    };
+  }
+
+  if (mode === 'processed') {
+    return {
+      ...plan,
+      track: {
+        ...plan.track,
+        beatTimesMs: [],
+        metronomeEnabled: false
+      }
+    };
+  }
+
+  return {
+    ...plan,
+    track: {
+      ...plan.track,
+      beatTimesMs: buildPreviewBeatTimes(plan.track),
+      metronomeEnabled: true
+    }
+  };
+}
+
+function buildMedleyPreviewPlan(
+  plan: MedleyExportPlan,
+  mode: 'processed' | 'metronome'
+): MedleyExportPlan {
+  return {
+    ...plan,
+    clips: plan.clips.map((clip) => ({
+      ...clip,
+      track:
+        mode === 'processed'
+          ? {
+              ...clip.track,
+              beatTimesMs: [],
+              metronomeEnabled: false
+            }
+          : {
+              ...clip.track,
+              beatTimesMs: buildPreviewBeatTimes(clip.track),
+              metronomeEnabled: true
+            }
+    }))
+  };
+}
+
+function buildSinglePreviewCachePath(
+  plan: SingleTrackExportPlan,
+  mode: 'original' | 'processed' | 'metronome'
+): string {
+  const derivedPlan = buildSinglePreviewPlan(plan, mode);
+  const signature = createHash('sha1')
+    .update(
+      JSON.stringify({
+        mode,
+        plan: derivedPlan,
+        source: buildFileStatSignature(plan.track.sourceFilePath),
+        metronomeSample: buildFileStatSignature(plan.metronomeSamplePath),
+        bitrateKbps: PREVIEW_BITRATE_KBPS
+      })
+    )
+    .digest('hex');
+  const baseName = sanitizeFileName(plan.track.trackName);
+  return path.join(getPreviewCacheDir('single'), `${baseName}__${signature.slice(0, 16)}.mp3`);
+}
+
+function buildMedleyPreviewCachePath(
+  plan: MedleyExportPlan,
+  mode: 'processed' | 'metronome'
+): string {
+  const derivedPlan = buildMedleyPreviewPlan(plan, mode);
+  const signature = createHash('sha1')
+    .update(
+      JSON.stringify({
+        mode,
+        plan: derivedPlan,
+        sources: derivedPlan.clips.map((clip) => buildFileStatSignature(clip.track.sourceFilePath)),
+        metronomeSample: buildFileStatSignature(plan.metronomeSamplePath),
+        bitrateKbps: PREVIEW_BITRATE_KBPS
+      })
+    )
+    .digest('hex');
+  return path.join(getPreviewCacheDir('medley'), `medley__${signature.slice(0, 16)}.mp3`);
 }
 
 async function createMetronomeTrack(
@@ -89,27 +418,87 @@ async function createMetronomeTrack(
   samplePath: string,
   beatTimesMs: number[],
   durationMs: number,
+  options: {
+    beatRenderMode: SingleTrackExportPlan['renderOptions']['beatRenderMode'];
+    beatOriginalBpm: number;
+    metronomeBpm: number;
+    beatsPerBar: number;
+  },
   outputPath: string
 ): Promise<void> {
-  if (beatTimesMs.length === 0 || !samplePath || !fs.existsSync(samplePath)) {
+  if (durationMs <= 0) {
+    await createSilence(ffmpegPath, 0, outputPath);
+    return;
+  }
+
+  const sampleExists = Boolean(samplePath && fs.existsSync(samplePath));
+  if (options.beatRenderMode === 'stretched-file' && sampleExists) {
+    const ratio =
+      options.beatOriginalBpm > 0 ? options.metronomeBpm / options.beatOriginalBpm : 1;
+    const args = [
+      '-y',
+      '-stream_loop',
+      '-1',
+      '-i',
+      samplePath,
+      '-t',
+      `${msToSec(durationMs)}`,
+      '-filter:a',
+      buildAtempoFilter(Math.max(0.01, ratio)),
+      '-c:a',
+      'pcm_s16le',
+      outputPath
+    ];
+    await runFfmpeg(ffmpegPath, args, durationMs);
+    return;
+  }
+
+  if (beatTimesMs.length === 0) {
     await createSilence(ffmpegPath, durationMs, outputPath);
     return;
   }
 
-  const clickSec = 0.05;
+  let effectiveSamplePath = samplePath;
+  let cleanupSyntheticSample = false;
+  if (!sampleExists) {
+    effectiveSamplePath = path.join(path.dirname(outputPath), 'synthetic-click.wav');
+    cleanupSyntheticSample = true;
+    const frequency = options.beatRenderMode === 'crisp-click' ? '1780' : '1450';
+    const clickSec = options.beatRenderMode === 'crisp-click' ? '0.035' : '0.06';
+    await runFfmpeg(
+      ffmpegPath,
+      [
+        '-y',
+        '-f',
+        'lavfi',
+        '-i',
+        `sine=frequency=${frequency}:duration=${clickSec}:sample_rate=48000`,
+        '-af',
+        'afade=t=in:st=0:d=0.002,afade=t=out:st=0.018:d=0.018',
+        '-c:a',
+        'pcm_s16le',
+        effectiveSamplePath
+      ],
+      60
+    );
+  }
+
+  const clickSec = options.beatRenderMode === 'crisp-click' ? 0.035 : 0.06;
+  const safeBeatsPerBar = Math.max(1, options.beatsPerBar);
   const nodes = beatTimesMs.map((time, idx) => {
     const delay = Math.max(0, Math.round(time));
-    return `[0:a]atrim=0:${clickSec},asetpts=PTS-STARTPTS,adelay=${delay}|${delay}[c${idx}]`;
+    const accentGain = idx % safeBeatsPerBar === 0 ? 1.35 : 1;
+    return `[0:a]atrim=0:${clickSec},asetpts=PTS-STARTPTS,volume=${accentGain},adelay=${delay}|${delay}[c${idx}]`;
   });
   const mixInputs = beatTimesMs.map((_, idx) => `[c${idx}]`).join('');
   const filter = `${nodes.join(';')};${mixInputs}amix=inputs=${beatTimesMs.length}:normalize=0,atrim=0:${msToSec(durationMs)}[out]`;
+  const filterGraph = createFilterGraphArgs(filter, path.dirname(outputPath), 'metronome-filter');
 
   const args = [
     '-y',
     '-i',
-    samplePath,
-    '-filter_complex',
-    filter,
+    effectiveSamplePath,
+    ...filterGraph.args,
     '-map',
     '[out]',
     '-c:a',
@@ -117,7 +506,14 @@ async function createMetronomeTrack(
     outputPath
   ];
 
-  await runFfmpeg(ffmpegPath, args, durationMs);
+  try {
+    await runFfmpeg(ffmpegPath, args, durationMs);
+  } finally {
+    filterGraph.cleanup();
+    if (cleanupSyntheticSample) {
+      fs.rmSync(effectiveSamplePath, { force: true });
+    }
+  }
 }
 
 async function renderSingleToFile(
@@ -129,27 +525,40 @@ async function renderSingleToFile(
 ): Promise<void> {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatstride-single-'));
   const metronomePath = path.join(tempDir, 'metronome.wav');
+  const resolvedPlan: SingleTrackExportPlan = {
+    ...plan,
+    renderOptions: {
+      ...plan.renderOptions,
+      resolvedStretchEngine: resolveStretchEngine(ffmpegPath, plan.renderOptions.stretchEngine)
+    }
+  };
 
   let metronomeInputIndex: number | undefined;
-  if (plan.track.metronomeEnabled) {
+  if (resolvedPlan.track.metronomeEnabled) {
     await createMetronomeTrack(
       ffmpegPath,
-      plan.metronomeSamplePath,
-      plan.track.beatTimesMs,
-      Math.round(plan.track.processedDurationMs),
+      resolvedPlan.metronomeSamplePath,
+      resolvedPlan.track.beatTimesMs,
+      Math.round(resolvedPlan.track.processedDurationMs),
+      {
+        beatRenderMode: resolvedPlan.renderOptions.beatRenderMode,
+        beatOriginalBpm: resolvedPlan.renderOptions.beatOriginalBpm,
+        metronomeBpm: resolvedPlan.track.metronomeBpm,
+        beatsPerBar: resolvedPlan.renderOptions.beatsPerBar
+      },
       metronomePath
     );
     metronomeInputIndex = 1;
   }
 
-  const { graph, outputLabel } = buildSingleTrackFilterGraph(plan, metronomeInputIndex);
-  const args = ['-y', '-i', plan.track.sourceFilePath];
+  const { graph, outputLabel } = buildSingleTrackFilterGraph(resolvedPlan, metronomeInputIndex);
+  const filterGraph = createFilterGraphArgs(graph, tempDir, 'single-filter');
+  const args = ['-y', '-i', resolvedPlan.track.sourceFilePath];
   if (metronomeInputIndex !== undefined) {
     args.push('-i', metronomePath);
   }
   args.push(
-    '-filter_complex',
-    graph,
+    ...filterGraph.args,
     '-map',
     outputLabel,
     ...buildOutputCodecArgs(plan.format, bitrateKbps),
@@ -157,49 +566,20 @@ async function renderSingleToFile(
   );
 
   try {
-    await runFfmpeg(ffmpegPath, args, plan.track.processedDurationMs, onProgress);
+    await runFfmpeg(ffmpegPath, args, resolvedPlan.track.processedDurationMs, onProgress);
   } finally {
+    filterGraph.cleanup();
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
-export async function exportSingleTrack(
-  ffmpegPath: string,
-  plan: SingleTrackExportPlan,
-  options?: {
-    bitrateKbps?: number;
-    onProgress?: (progress: FfmpegProgress) => void;
-  }
-): Promise<string> {
-  const outputDir = plan.outputDir || app.getPath('documents');
-  ensureDir(outputDir);
-  const outputPath = path.join(outputDir, `${plan.track.outputBaseName}.${plan.format}`);
-  await renderSingleToFile(
-    ffmpegPath,
-    plan,
-    outputPath,
-    options?.bitrateKbps ?? 320,
-    options?.onProgress
-  );
-  return outputPath;
-}
-
-interface MedleyRenderedClip {
-  filePath: string;
-  startMs: number;
-  endMs: number;
-}
-
-export async function exportMedley(
+async function renderMedleyToFile(
   ffmpegPath: string,
   plan: MedleyExportPlan,
-  options?: {
-    bitrateKbps?: number;
-    onProgress?: (progress: FfmpegProgress) => void;
-  }
-): Promise<string> {
-  const outputDir = plan.outputDir || app.getPath('documents');
-  ensureDir(outputDir);
+  outputPath: string,
+  bitrateKbps: number,
+  onProgress?: (progress: FfmpegProgress) => void
+): Promise<void> {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'beatstride-medley-'));
 
   try {
@@ -208,10 +588,12 @@ export async function exportMedley(
       const clip = plan.clips[i];
       const singlePlan: SingleTrackExportPlan = {
         mode: 'single',
+        projectFilePath: plan.projectFilePath,
         outputDir: tempDir,
         format: 'wav',
         normalizeLoudness: false,
         metronomeSamplePath: plan.metronomeSamplePath,
+        renderOptions: plan.renderOptions,
         track: {
           ...clip.track,
           outputBaseName: `clip_${i.toString().padStart(3, '0')}`
@@ -219,12 +601,12 @@ export async function exportMedley(
       };
       const clipPath = path.join(tempDir, `${singlePlan.track.outputBaseName}.wav`);
       await renderSingleToFile(ffmpegPath, singlePlan, clipPath, 320, (progress) => {
-        if (!options?.onProgress) {
+        if (!onProgress) {
           return;
         }
         const base = i / Math.max(1, plan.clips.length);
         const ratio = (base + progress.ratio / Math.max(1, plan.clips.length)) * 0.8;
-        options.onProgress({ ...progress, ratio: Math.min(0.8, ratio) });
+        onProgress({ ...progress, ratio: Math.min(0.8, ratio) });
       });
       renderedClips.push({
         filePath: clipPath,
@@ -256,25 +638,196 @@ export async function exportMedley(
     }
     const labels = inputFiles.map((_, index) => `[${index}:a]`);
     const { graph, outputLabel } = buildMedleyMixFilter(plan, labels);
-    const outputPath = path.join(outputDir, `beatstride_medley.${plan.format}`);
+    const filterGraph = createFilterGraphArgs(graph, tempDir, 'medley-filter');
 
     args.push(
-      '-filter_complex',
-      graph,
+      ...filterGraph.args,
       '-map',
       outputLabel,
-      ...buildOutputCodecArgs(plan.format, options?.bitrateKbps ?? 320),
+      ...buildOutputCodecArgs(plan.format, bitrateKbps),
       outputPath
     );
 
-    await runFfmpeg(ffmpegPath, args, plan.durationMs, (progress) => {
-      options?.onProgress?.({
-        ...progress,
-        ratio: 0.8 + progress.ratio * 0.2
+    try {
+      await runFfmpeg(ffmpegPath, args, plan.durationMs, (progress) => {
+        onProgress?.({
+          ...progress,
+          ratio: 0.8 + progress.ratio * 0.2
+        });
       });
-    });
-    return outputPath;
+    } finally {
+      filterGraph.cleanup();
+    }
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+export async function exportSingleTrack(
+  ffmpegPath: string,
+  plan: SingleTrackExportPlan,
+  options?: {
+    bitrateKbps?: number;
+    onProgress?: (progress: FfmpegProgress) => void;
+  }
+): Promise<string> {
+  const outputDir = plan.outputDir || app.getPath('documents');
+  ensureDir(outputDir);
+  const outputPath = path.join(outputDir, `${plan.track.outputBaseName}.${plan.format}`);
+  await renderSingleToFile(
+    ffmpegPath,
+    plan,
+    outputPath,
+    options?.bitrateKbps ?? 320,
+    options?.onProgress
+  );
+  return outputPath;
+}
+
+export async function renderSinglePreviewPayload(
+  ffmpegPath: string,
+  plan: SingleTrackExportPlan,
+  mode: 'original' | 'processed' | 'metronome'
+): Promise<PreparedPlaybackAudio> {
+  const previewPlan = buildSinglePreviewPlan(plan, mode);
+  const outputPath = buildSinglePreviewCachePath(plan, mode);
+  if (!fs.existsSync(outputPath)) {
+    await renderSingleToFile(
+      ffmpegPath,
+      {
+        ...previewPlan,
+        format: 'mp3',
+        normalizeLoudness: false
+      },
+      outputPath,
+      PREVIEW_BITRATE_KBPS
+    );
+  }
+  return createPreparedAudioPayload(outputPath);
+}
+
+export async function renderMedleyPreviewPayload(
+  ffmpegPath: string,
+  plan: MedleyExportPlan,
+  mode: 'processed' | 'metronome'
+): Promise<PreparedPlaybackAudio> {
+  const previewPlan = buildMedleyPreviewPlan(plan, mode);
+  const outputPath = buildMedleyPreviewCachePath(plan, mode);
+  if (!fs.existsSync(outputPath)) {
+    await renderMedleyToFile(
+      ffmpegPath,
+      {
+        ...previewPlan,
+        format: 'mp3',
+        normalizeLoudness: false
+      },
+      outputPath,
+      PREVIEW_BITRATE_KBPS
+    );
+  }
+  return createPreparedAudioPayload(outputPath);
+}
+
+export async function generateTrackProxies(
+  ffmpegPath: string,
+  plans: SingleTrackExportPlan[],
+  options?: {
+    bitrateKbps?: number;
+  }
+): Promise<GeneratedTrackProxy[]> {
+  const results: GeneratedTrackProxy[] = [];
+
+  for (const plan of plans) {
+    if (!plan.projectFilePath) {
+      throw new Error(`歌曲 ${plan.track.trackName} 所在项目尚未保存，无法生成代理文件。`);
+    }
+    const proxyDir = getProjectProxyDir(plan.projectFilePath);
+    if (!proxyDir) {
+      throw new Error(`无法确定歌曲 ${plan.track.trackName} 的代理目录。`);
+    }
+    ensureDir(proxyDir);
+    const outputPath = buildProjectProxyPath(plan.projectFilePath, plan);
+    cleanupStaleTrackProxies(plan.projectFilePath, plan.track.trackId, outputPath);
+
+    let reused = false;
+    if (!fs.existsSync(outputPath)) {
+      await renderMaterialProxy(
+        ffmpegPath,
+        plan.track.sourceFilePath,
+        outputPath,
+        plan.track.trimmedSourceDurationMs + plan.track.trimInMs + plan.track.trimOutMs,
+        options?.bitrateKbps ?? TRACK_PROXY_BITRATE_KBPS
+      );
+    } else {
+      reused = true;
+    }
+
+    results.push({
+      trackId: plan.track.trackId,
+      filePath: outputPath,
+      fileName: path.basename(outputPath),
+      reused
+    });
+  }
+
+  return results;
+}
+
+export function getTrackProxyStatuses(plans: SingleTrackExportPlan[]): TrackProxyStatusResult[] {
+  return plans.map((plan) => {
+    if (!plan.projectFilePath) {
+      return {
+        trackId: plan.track.trackId,
+        status: 'missing'
+      };
+    }
+
+    const readyPath = tryReuseProjectProxy(plan);
+    if (readyPath) {
+      return {
+        trackId: plan.track.trackId,
+        status: 'ready',
+        filePath: readyPath
+      };
+    }
+
+    if (hasAnyTrackProxy(plan.projectFilePath, plan.track.trackId)) {
+      return {
+        trackId: plan.track.trackId,
+        status: 'stale'
+      };
+    }
+
+    return {
+      trackId: plan.track.trackId,
+      status: 'missing'
+    };
+  });
+}
+
+interface MedleyRenderedClip {
+  filePath: string;
+  startMs: number;
+  endMs: number;
+}
+
+export async function exportMedley(
+  ffmpegPath: string,
+  plan: MedleyExportPlan,
+  options?: {
+    bitrateKbps?: number;
+    onProgress?: (progress: FfmpegProgress) => void;
+  }
+): Promise<string> {
+  const outputDir = plan.outputDir || app.getPath('documents');
+  ensureDir(outputDir);
+  const outputPath = path.join(outputDir, `beatstride_medley.${plan.format}`);
+  await renderMedleyToFile(
+    ffmpegPath,
+    plan,
+    outputPath,
+    options?.bitrateKbps ?? 320,
+    options?.onProgress
+  );
+  return outputPath;
 }

@@ -4,25 +4,40 @@ import {
   buildSingleTrackExportPlan
 } from './exportPlanService';
 
-export function buildSingleTrackPreviewPlan(
+export function buildSingleTrackPreviewExportPlan(
   track: Track,
-  project: Pick<ProjectFile, 'globalTargetBpm' | 'defaultMetronomeSamplePath'>
-): TrackRenderPlan {
+  project: Pick<ProjectFile, 'globalTargetBpm' | 'defaultMetronomeSamplePath' | 'mixTuning'>
+) {
   return buildSingleTrackExportPlan(track, {
+    globalTargetBpm: project.globalTargetBpm,
     outputDir: '',
     format: 'wav',
     metronomeSamplePath: project.defaultMetronomeSamplePath,
-    normalizeLoudness: false
-  }).track;
+    normalizeLoudness: false,
+    mixTuning: project.mixTuning
+  });
 }
 
-export function buildProjectPreviewPlan(project: ProjectFile): TrackRenderPlan[] {
+export function buildSingleTrackPreviewPlan(
+  track: Track,
+  project: Pick<ProjectFile, 'globalTargetBpm' | 'defaultMetronomeSamplePath' | 'mixTuning'>
+): TrackRenderPlan {
+  return buildSingleTrackPreviewExportPlan(track, project).track;
+}
+
+export function buildProjectPreviewExportPlan(project: ProjectFile) {
   return buildMedleyExportPlan(project, {
+    globalTargetBpm: project.globalTargetBpm,
     outputDir: '',
     format: 'wav',
     metronomeSamplePath: project.defaultMetronomeSamplePath,
     normalizeLoudness: false,
     gapMs: project.exportPreset.gapMs,
-    crossfadeMs: project.exportPreset.crossfadeMs
-  }).clips.map((clip) => clip.track);
+    crossfadeMs: project.exportPreset.crossfadeMs,
+    mixTuning: project.mixTuning
+  });
+}
+
+export function buildProjectPreviewPlan(project: ProjectFile): TrackRenderPlan[] {
+  return buildProjectPreviewExportPlan(project).clips.map((clip) => clip.track);
 }

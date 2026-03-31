@@ -9,7 +9,7 @@ interface TitleBarProps {
 }
 
 export function TitleBar({
-  projectName: _projectName,
+  projectName,
   onOpenSettings,
   onExport,
   onImport,
@@ -29,6 +29,7 @@ export function TitleBar({
         <button className="wire-btn" onClick={onOpenSettings}>
           {t('common.settings')}
         </button>
+        {projectName && <span className="muted">{projectName}</span>}
       </div>
       <div className="toolbar-actions no-drag">
         <button className="export-box" onClick={onExport}>

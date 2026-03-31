@@ -1,8 +1,19 @@
-import type { AppSettings, ExportPreset, LanguageCode, ThemeMode } from './types';
+import type {
+  AppSettings,
+  ExportPreset,
+  LanguageCode,
+  MixTuningSettings,
+  ThemeMode
+} from './types';
 
 export const APP_NAME = 'BeatStride';
 export const PROJECT_FILE_EXT = '.runbeat-project.json';
 export const PROJECT_VERSION = 1;
+export const PROJECT_PROXY_DIRNAME = 'beatstride-proxies';
+export const LEGACY_DEFAULT_METRONOME_SAMPLE_PATH =
+  'C:\\CodeProgram\\StrideBeat\\resources\\metronome\\180BPM.mp3';
+export const DEFAULT_METRONOME_SAMPLE_PATH =
+  'C:\\CodeProgram\\BeatStride\\resources\\metronome\\180BPM.mp3';
 
 export const SUPPORTED_IMPORT_EXT = ['.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg'];
 export const SUPPORTED_EXPORT_FORMATS = ['wav', 'mp3'] as const;
@@ -22,14 +33,34 @@ export const DEFAULT_EXPORT_PRESET: ExportPreset = {
   crossfadeMs: 0
 };
 
+export const DEFAULT_MIX_TUNING: MixTuningSettings = {
+  analysisSeconds: 120,
+  beatGainDb: 10,
+  beatOriginalBpm: 180,
+  beatRenderMode: 'stretched-file',
+  stretchEngine: 'auto',
+  harmonicTolerance: 0.12,
+  harmonicMappingEnabled: true,
+  halfMapUpperBpm: 110,
+  headroomDb: 1,
+  beatsPerBar: 4,
+  transitionBars: 2,
+  transitionDuckDb: 4,
+  loudnormEnabled: true,
+  targetLufs: -14,
+  targetLra: 10,
+  targetTp: -1
+};
+
 export const DEFAULT_SETTINGS: AppSettings = {
   language: DEFAULT_LANGUAGE,
   theme: DEFAULT_THEME,
   defaultExportDir: '',
   defaultTargetBpm: 180,
   defaultFadeMs: 50,
-  defaultMetronomeSamplePath: '',
+  defaultMetronomeSamplePath: DEFAULT_METRONOME_SAMPLE_PATH,
   normalizeLoudnessByDefault: false,
+  developerMode: false,
   ffmpeg: {
     ffmpegPath: '',
     ffprobePath: '',

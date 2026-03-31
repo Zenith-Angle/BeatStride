@@ -2,9 +2,13 @@ import type {
   AppSettings,
   AudioProbeInfo,
   FfmpegBinaryConfig,
+  GeneratedTrackProxy,
   MedleyExportPlan,
+  PreparedPlaybackAudio,
   ProjectFile,
-  SingleTrackExportPlan
+  SingleTrackExportPlan,
+  TrackProxyStatusResult,
+  TempoAnalysisResult
 } from './types';
 
 export interface ExportProgressPayload {
@@ -42,6 +46,23 @@ export interface BeatStrideApi {
   saveRecovery(project: ProjectFile): Promise<boolean>;
   loadRecovery(): Promise<ProjectFile | null>;
   probeAudio(filePath: string): Promise<AudioProbeInfo>;
+  detectTempo(filePath: string, analysisSeconds: number): Promise<TempoAnalysisResult>;
+  preparePlaybackAudio(filePath: string): Promise<PreparedPlaybackAudio>;
+  prepareSinglePreviewAudio(payload: {
+    plan: SingleTrackExportPlan;
+    mode: 'original' | 'processed' | 'metronome';
+  }): Promise<PreparedPlaybackAudio>;
+  prepareMedleyPreviewAudio(payload: {
+    plan: MedleyExportPlan;
+    mode: 'processed' | 'metronome';
+  }): Promise<PreparedPlaybackAudio>;
+  generateTrackProxies(payload: {
+    plans: SingleTrackExportPlan[];
+    bitrateKbps?: number;
+  }): Promise<GeneratedTrackProxy[]>;
+  getTrackProxyStatuses(payload: {
+    plans: SingleTrackExportPlan[];
+  }): Promise<TrackProxyStatusResult[]>;
   runSingleExport(payload: {
     id: string;
     plan: SingleTrackExportPlan;

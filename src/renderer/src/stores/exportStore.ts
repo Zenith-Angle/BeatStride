@@ -60,10 +60,13 @@ export const useExportStore = create<ExportState>((set) => ({
     set((state) => ({ jobs: [job, ...state.jobs] }));
     try {
       const plan = buildSingleTrackExportPlan(track, {
+        globalTargetBpm: project.globalTargetBpm,
         outputDir: options.outputDir,
         format: options.format,
         metronomeSamplePath: project.defaultMetronomeSamplePath,
-        normalizeLoudness: project.exportPreset.normalizeLoudness
+        normalizeLoudness: project.mixTuning.loudnormEnabled,
+        projectFilePath: project.meta.filePath,
+        mixTuning: project.mixTuning
       });
       const outputPath = await window.beatStride.runSingleExport({
         id,
@@ -100,12 +103,15 @@ export const useExportStore = create<ExportState>((set) => ({
     set((state) => ({ jobs: [job, ...state.jobs] }));
     try {
       const plan = buildMedleyExportPlan(project, {
+        globalTargetBpm: project.globalTargetBpm,
         outputDir: options.outputDir,
         format: options.format,
         metronomeSamplePath: project.defaultMetronomeSamplePath,
-        normalizeLoudness: project.exportPreset.normalizeLoudness,
+        normalizeLoudness: project.mixTuning.loudnormEnabled,
         gapMs: project.exportPreset.gapMs,
-        crossfadeMs: project.exportPreset.crossfadeMs
+        crossfadeMs: project.exportPreset.crossfadeMs,
+        mixTuning: project.mixTuning,
+        transitionDuckDb: project.mixTuning.transitionDuckDb
       });
       const outputPath = await window.beatStride.runMedleyExport({
         id,

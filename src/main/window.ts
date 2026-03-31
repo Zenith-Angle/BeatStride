@@ -2,7 +2,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BrowserWindow, shell } from 'electron';
 
-export function createMainWindow(): BrowserWindow {
+export function applyDeveloperTools(window: BrowserWindow, enabled: boolean): void {
+  if (enabled) {
+    if (!window.webContents.isDevToolsOpened()) {
+      window.webContents.openDevTools({ mode: 'detach' });
+    }
+    return;
+  }
+
+  if (window.webContents.isDevToolsOpened()) {
+    window.webContents.closeDevTools();
+  }
+}
+
+export function createMainWindow(options?: {
+  isDeveloperModeEnabled?: () => boolean;
+}): BrowserWindow {
   const preloadMjsPath = path.join(__dirname, '../preload/index.mjs');
   const preloadJsPath = path.join(__dirname, '../preload/index.js');
   const preloadPath = fs.existsSync(preloadMjsPath) ? preloadMjsPath : preloadJsPath;
@@ -40,11 +55,37 @@ export function createMainWindow(): BrowserWindow {
     return { action: 'deny' };
   });
 
+  window.webContents.on('before-input-event', (event, input) => {
+    const devMode = options?.isDeveloperModeEnabled?.() ?? false;
+    const togglePressed =
+      input.type === 'keyDown' &&
+      (input.key === 'F12' ||
+        ((input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i'));
+
+    if (!togglePressed) {
+      return;
+    }
+
+    if (!devMode) {
+      event.preventDefault();
+      return;
+    }
+
+    event.preventDefault();
+    if (window.webContents.isDevToolsOpened()) {
+      window.webContents.closeDevTools();
+    } else {
+      window.webContents.openDevTools({ mode: 'detach' });
+    }
+  });
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void window.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
     void window.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
+
+  applyDeveloperTools(window, options?.isDeveloperModeEnabled?.() ?? false);
 
   return window;
 }

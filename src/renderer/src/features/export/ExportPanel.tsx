@@ -22,6 +22,7 @@ export function ExportPanel({
   const [outputDir, setOutputDir] = useState(project.exportPreset.outputDir);
 
   const activeJob = exportStore.jobs[0];
+  const singleBlocked = mode === 'single' && !selectedTrack;
 
   const pickOutputDir = async () => {
     const dir = await window.beatStride.selectExportDirectory();
@@ -31,6 +32,9 @@ export function ExportPanel({
   };
 
   const runExport = async () => {
+    if (mode === 'single' && !selectedTrack) {
+      return;
+    }
     if (mode === 'single' && selectedTrack) {
       await exportStore.exportSingleTrack(selectedTrack, project, {
         outputDir,
@@ -43,21 +47,7 @@ export function ExportPanel({
   };
 
   return (
-    <section
-      className="panel no-drag"
-      style={{
-        position: 'absolute',
-        right: 20,
-        top: 64,
-        width: 360,
-        maxHeight: '80vh',
-        border: '1px solid var(--line)',
-        borderRadius: 14,
-        background: 'var(--bg-elevated)',
-        boxShadow: 'var(--shadow-md)',
-        zIndex: 20
-      }}
-    >
+    <section className="panel no-drag floating-panel export-panel">
       <div className="panel-header">
         <strong>{t('export.title')}</strong>
         <button onClick={onClose}>{t('common.close')}</button>
@@ -90,7 +80,7 @@ export function ExportPanel({
         </label>
         <label className="field">
           <span>{t('export.outputDir')}</span>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 6 }}>
+          <div className="path-field-row">
             <input
               value={outputDir}
               onChange={(event) => setOutputDir(event.target.value)}
@@ -99,11 +89,25 @@ export function ExportPanel({
             <button onClick={pickOutputDir}>...</button>
           </div>
         </label>
-        <button className="primary" onClick={runExport} style={{ width: '100%', marginTop: 10 }}>
+        <div className="muted" style={{ fontSize: 12, lineHeight: 1.6 }}>
+          当前微调:
+          {' '}
+          {project.mixTuning.stretchEngine}
+          {' / '}
+          {project.mixTuning.beatRenderMode}
+          {' / '}
+          {project.mixTuning.loudnormEnabled ? `loudnorm ${project.mixTuning.targetLufs} LUFS` : 'loudnorm 关闭'}
+        </div>
+        {singleBlocked && (
+          <div style={{ color: 'var(--danger)', fontSize: 12 }}>
+            单曲导出需要先在工作区选中一首歌曲。
+          </div>
+        )}
+        <button className="primary export-run-button" onClick={runExport} disabled={singleBlocked}>
           {t('export.run')}
         </button>
         {activeJob && (
-          <div style={{ marginTop: 12 }}>
+          <div className="export-job-status">
             <div className="muted">
               {activeJob.status === 'running' ? t('export.running') : activeJob.status}
             </div>

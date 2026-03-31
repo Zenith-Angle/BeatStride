@@ -3,6 +3,9 @@ export type LanguageCode = 'zh-CN' | 'zh-TW' | 'en-US' | 'ja-JP' | 'fr-FR';
 export type ExportMode = 'single' | 'medley';
 export type TimeSignature = '4/4';
 export type ExportFormat = 'wav' | 'mp3';
+export type StretchEngine = 'auto' | 'rubberband' | 'atempo';
+export type ResolvedStretchEngine = 'rubberband' | 'atempo';
+export type BeatRenderMode = 'crisp-click' | 'sampled-click' | 'stretched-file';
 
 export interface FfmpegBinaryConfig {
   ffmpegPath: string;
@@ -24,6 +27,25 @@ export interface ExportPreset {
   crossfadeMs: number;
 }
 
+export interface MixTuningSettings {
+  analysisSeconds: number;
+  beatGainDb: number;
+  beatOriginalBpm: number;
+  beatRenderMode: BeatRenderMode;
+  stretchEngine: StretchEngine;
+  harmonicTolerance: number;
+  harmonicMappingEnabled: boolean;
+  halfMapUpperBpm: number;
+  headroomDb: number;
+  beatsPerBar: number;
+  transitionBars: number;
+  transitionDuckDb: number;
+  loudnormEnabled: boolean;
+  targetLufs: number;
+  targetLra: number;
+  targetTp: number;
+}
+
 export interface AppSettings {
   language: LanguageCode;
   theme: ThemeMode;
@@ -32,6 +54,7 @@ export interface AppSettings {
   defaultFadeMs: number;
   defaultMetronomeSamplePath: string;
   normalizeLoudnessByDefault: boolean;
+  developerMode: boolean;
   ffmpeg: FfmpegBinaryConfig;
   recentProjectPaths: string[];
 }
@@ -109,6 +132,7 @@ export interface ProjectFile {
   language: LanguageCode;
   tracks: Track[];
   exportPreset: ExportPreset;
+  mixTuning: MixTuningSettings;
 }
 
 export interface TrackRenderPlan {
@@ -117,13 +141,17 @@ export interface TrackRenderPlan {
   sourceFilePath: string;
   outputBaseName: string;
   sourceBpm: number;
+  effectiveSourceBpm: number;
   targetBpm: number;
+  metronomeBpm: number;
   speedRatio: number;
   trimmedSourceDurationMs: number;
   processedDurationMs: number;
   downbeatOffsetMsAfterSpeed: number;
   metronomeStartMs: number;
   beatTimesMs: number[];
+  beatsPerBar: number;
+  harmonicMode: string;
   trackStartMs: number;
   trimInMs: number;
   trimOutMs: number;
@@ -137,10 +165,12 @@ export interface TrackRenderPlan {
 
 export interface SingleTrackExportPlan {
   mode: 'single';
+  projectFilePath?: string;
   outputDir: string;
   format: ExportFormat;
   normalizeLoudness: boolean;
   metronomeSamplePath: string;
+  renderOptions: ProjectRenderOptions;
   track: TrackRenderPlan;
 }
 
@@ -152,12 +182,15 @@ export interface MedleyClipPlan {
 
 export interface MedleyExportPlan {
   mode: 'medley';
+  projectFilePath?: string;
   outputDir: string;
   format: ExportFormat;
   normalizeLoudness: boolean;
   gapMs: number;
   crossfadeMs: number;
+  transitionDuckDb: number;
   metronomeSamplePath: string;
+  renderOptions: ProjectRenderOptions;
   clips: MedleyClipPlan[];
   durationMs: number;
 }
@@ -181,6 +214,32 @@ export interface AudioProbeInfo {
   bitRate?: number;
 }
 
+export interface TempoAnalysisResult {
+  bpm: number;
+  confidence: number;
+}
+
+export interface PreparedPlaybackAudio {
+  mimeType: string;
+  fileName: string;
+  base64Data: string;
+}
+
+export interface GeneratedTrackProxy {
+  trackId: string;
+  filePath: string;
+  fileName: string;
+  reused: boolean;
+}
+
+export type TrackProxyStatus = 'missing' | 'ready' | 'stale' | 'generating';
+
+export interface TrackProxyStatusResult {
+  trackId: string;
+  status: TrackProxyStatus;
+  filePath?: string;
+}
+
 export interface ExportSuffixRules {
   includeBpm: boolean;
   includeMetronomeTag: boolean;
@@ -189,13 +248,33 @@ export interface ExportSuffixRules {
 
 export interface AlignmentSettings {
   globalTargetBpm: number;
+  harmonicTolerance?: number;
+  harmonicMappingEnabled?: boolean;
+  halfMapUpperBpm?: number;
 }
 
 export interface ExportBuildSettings {
+  globalTargetBpm: number;
   outputDir: string;
   format: ExportFormat;
   metronomeSamplePath: string;
   normalizeLoudness: boolean;
+  projectFilePath?: string;
   gapMs?: number;
   crossfadeMs?: number;
+  mixTuning: MixTuningSettings;
+  transitionDuckDb?: number;
+}
+
+export interface ProjectRenderOptions {
+  beatGainDb: number;
+  beatOriginalBpm: number;
+  beatRenderMode: BeatRenderMode;
+  stretchEngine: StretchEngine;
+  resolvedStretchEngine?: ResolvedStretchEngine;
+  headroomDb: number;
+  beatsPerBar: number;
+  targetLufs: number;
+  targetLra: number;
+  targetTp: number;
 }

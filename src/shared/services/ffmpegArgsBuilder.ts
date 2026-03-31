@@ -1,4 +1,8 @@
-import type { MedleyExportPlan, SingleTrackExportPlan } from '../types';
+import type {
+  MedleyExportPlan,
+  ResolvedStretchEngine,
+  SingleTrackExportPlan
+} from '../types';
 import { splitAtempoChain } from '../utils/tempo';
 import { msToSec } from '../utils/time';
 
@@ -21,6 +25,42 @@ export function buildAtempoFilter(ratio: number): string {
   return chain.map((item) => `atempo=${item}`).join(',');
 }
 
+function buildRubberbandFilter(ratio: number): string {
+  return `rubberband=tempo=${ratio.toFixed(8)}:transients=crisp:formant=preserved:phase=laminar:window=short`;
+}
+
+function buildTempoFilter(ratio: number, engine: ResolvedStretchEngine): string {
+  return engine === 'rubberband' ? buildRubberbandFilter(ratio) : buildAtempoFilter(ratio);
+}
+
+function buildLoudnormFilter(plan: Pick<SingleTrackExportPlan | MedleyExportPlan, 'renderOptions'>): string {
+  return `loudnorm=I=${plan.renderOptions.targetLufs}:TP=${plan.renderOptions.targetTp}:LRA=${plan.renderOptions.targetLra}`;
+}
+
+function appendFinalProcessing(
+  filters: string[],
+  inputLabel: string,
+  plan: Pick<SingleTrackExportPlan | MedleyExportPlan, 'normalizeLoudness' | 'renderOptions'>
+): string {
+  let currentLabel = inputLabel;
+
+  if (plan.normalizeLoudness) {
+    const nextLabel = '[norm]';
+    filters.push(`${currentLabel}${buildLoudnormFilter(plan)}${nextLabel}`);
+    currentLabel = nextLabel;
+  }
+
+  if (plan.renderOptions.headroomDb > 0) {
+    const nextLabel = '[final]';
+    filters.push(
+      `${currentLabel}volume=${dbToLinear(-Math.abs(plan.renderOptions.headroomDb))}${nextLabel}`
+    );
+    currentLabel = nextLabel;
+  }
+
+  return currentLabel;
+}
+
 export function buildSingleTrackFilterGraph(
   plan: SingleTrackExportPlan,
   metronomeInputIndex?: number
@@ -29,34 +69,42 @@ export function buildSingleTrackFilterGraph(
   const filters: string[] = [];
   const trimStart = msToSec(track.trimInMs);
   const trimEnd = msToSec(track.trimmedSourceDurationMs + track.trimInMs);
-  const atempo = buildAtempoFilter(track.speedRatio);
+  const tempoFilter = buildTempoFilter(
+    track.speedRatio,
+    plan.renderOptions.resolvedStretchEngine ?? 'atempo'
+  );
   const fadeInSec = msToSec(track.fadeInMs);
   const fadeOutSec = msToSec(track.fadeOutMs);
   const fadeOutStart = Math.max(0, msToSec(track.processedDurationMs) - fadeOutSec);
   const { left, right } = panToChannelScale(track.pan);
+  const mainChain = [
+    `atrim=start=${trimStart}:end=${trimEnd}`,
+    'asetpts=PTS-STARTPTS',
+    tempoFilter,
+    `afade=t=in:st=0:d=${fadeInSec}`,
+    `afade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
+    `volume=${dbToLinear(track.volumeDb)}`
+  ];
+
+  if (left !== 1 || right !== 1) {
+    mainChain.push(`pan=stereo|c0=${left}*FL|c1=${right}*FR`);
+  }
 
   filters.push(
-    `[0:a]atrim=start=${trimStart}:end=${trimEnd},asetpts=PTS-STARTPTS,${atempo},afade=t=in:st=0:d=${fadeInSec},afade=t=out:st=${fadeOutStart}:d=${fadeOutSec},volume=${dbToLinear(track.volumeDb)},pan=stereo|c0=c0*${left}|c1=c1*${right}[main]`
+    `[0:a]${mainChain.join(',')}[main]`
   );
 
+  let currentLabel = '[main]';
   if (metronomeInputIndex !== undefined && track.metronomeEnabled) {
     filters.push(
-      `[${metronomeInputIndex}:a]volume=${dbToLinear(track.metronomeVolumeDb)}[metro]`
+      `[${metronomeInputIndex}:a]volume=${dbToLinear(track.metronomeVolumeDb + plan.renderOptions.beatGainDb)}[metro]`
     );
-    filters.push(`[main][metro]amix=inputs=2:normalize=0[mix]`);
-    const out = plan.normalizeLoudness ? '[mixnorm]' : '[mix]';
-    if (plan.normalizeLoudness) {
-      filters.push(`[mix]loudnorm=I=-16:TP=-1.5:LRA=11[mixnorm]`);
-    }
-    return { graph: filters.join(';'), outputLabel: out };
+    filters.push(`${currentLabel}[metro]amix=inputs=2:normalize=0[mix]`);
+    currentLabel = '[mix]';
   }
 
-  if (plan.normalizeLoudness) {
-    filters.push('[main]loudnorm=I=-16:TP=-1.5:LRA=11[mainnorm]');
-    return { graph: filters.join(';'), outputLabel: '[mainnorm]' };
-  }
-
-  return { graph: filters.join(';'), outputLabel: '[main]' };
+  const outputLabel = appendFinalProcessing(filters, currentLabel, plan);
+  return { graph: filters.join(';'), outputLabel };
 }
 
 export function buildOutputCodecArgs(format: 'wav' | 'mp3', bitrateKbps = 320): string[] {
@@ -74,43 +122,49 @@ export function buildMedleyMixFilter(
     return { graph: '', outputLabel: '' };
   }
   if (inputLabels.length === 1) {
-    const final = plan.normalizeLoudness ? '[mixnorm]' : '[mix]';
-    const normalize = plan.normalizeLoudness
-      ? ';[mix]loudnorm=I=-16:TP=-1.5:LRA=11[mixnorm]'
-      : '';
+    const filters: string[] = [`${inputLabels[0]}anull[mix]`];
+    const final = appendFinalProcessing(filters, '[mix]', plan);
     return {
-      graph: `${inputLabels[0]}anull[mix]${normalize}`,
+      graph: filters.join(';'),
       outputLabel: final
     };
   }
 
   if (plan.crossfadeMs > 0) {
     const fadeSec = msToSec(plan.crossfadeMs);
-    let chain = '';
+    const duckLinear =
+      plan.transitionDuckDb > 0 ? dbToLinear(-Math.abs(plan.transitionDuckDb)) : 1;
+    const filters: string[] = [];
+    const preparedLabels = inputLabels.map((label, idx) => {
+      const next = `[src${idx}]`;
+      if (duckLinear !== 1) {
+        filters.push(`${label}volume=${duckLinear}${next}`);
+      } else {
+        filters.push(`${label}anull${next}`);
+      }
+      return next;
+    });
+
     let current = '';
-    inputLabels.forEach((label, idx) => {
+    preparedLabels.forEach((label, idx) => {
       if (idx === 0) {
         current = '[xf0]';
-        chain += `${label}anull${current};`;
+        filters.push(`${label}anull${current}`);
       } else {
         const next = idx === inputLabels.length - 1 ? '[mix]' : `[xf${idx}]`;
-        chain += `${current}${label}acrossfade=d=${fadeSec}:c1=tri:c2=tri${next};`;
+        filters.push(`${current}${label}acrossfade=d=${fadeSec}:c1=tri:c2=tri${next}`);
         current = next;
       }
     });
-    if (plan.normalizeLoudness) {
-      chain += '[mix]loudnorm=I=-16:TP=-1.5:LRA=11[mixnorm]';
-      return { graph: chain, outputLabel: '[mixnorm]' };
-    }
-    return { graph: chain.replace(/;$/, ''), outputLabel: '[mix]' };
+    const outputLabel = appendFinalProcessing(filters, '[mix]', plan);
+    return { graph: filters.join(';'), outputLabel };
   }
 
   const concatInputs = inputLabels.join('');
-  const graph = `${concatInputs}concat=n=${inputLabels.length}:v=0:a=1[mix]${
-    plan.normalizeLoudness ? ';[mix]loudnorm=I=-16:TP=-1.5:LRA=11[mixnorm]' : ''
-  }`;
+  const filters = [`${concatInputs}concat=n=${inputLabels.length}:v=0:a=1[mix]`];
+  const outputLabel = appendFinalProcessing(filters, '[mix]', plan);
   return {
-    graph,
-    outputLabel: plan.normalizeLoudness ? '[mixnorm]' : '[mix]'
+    graph: filters.join(';'),
+    outputLabel
   };
 }

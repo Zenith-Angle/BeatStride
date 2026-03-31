@@ -22,7 +22,7 @@ export function WelcomePage({
   return (
     <div className="welcome">
       <section className="welcome-card">
-        <div>
+        <div className="welcome-hero">
           <h1>{t('welcome.title')}</h1>
           <p className="muted">{t('welcome.subtitle')}</p>
         </div>
@@ -33,14 +33,14 @@ export function WelcomePage({
           <button onClick={onOpenProject}>{t('welcome.openProject')}</button>
           <button onClick={onRestoreRecovery}>{t('welcome.recovery')}</button>
         </div>
-        <div>
+        <div className="welcome-section">
           <h3>{t('welcome.ffmpegStatus')}</h3>
           <p className="muted">
             {hasFfmpeg ? t('welcome.ffmpegAvailable') : t('welcome.ffmpegMissing')}
           </p>
           <p className="muted">{settings.ffmpeg.ffmpegPath || '-'}</p>
         </div>
-        <div>
+        <div className="welcome-section">
           <h3>{t('welcome.recentProjects')}</h3>
           {settings.recentProjectPaths.length === 0 ? (
             <p className="muted">-</p>
@@ -48,7 +48,7 @@ export function WelcomePage({
             settings.recentProjectPaths.slice(0, 6).map((item) => (
               <button
                 key={item}
-                style={{ display: 'block', marginBottom: 6, width: '100%', textAlign: 'left' }}
+                className="welcome-recent-button"
                 onClick={() => onOpenRecent(item)}
               >
                 {item}
