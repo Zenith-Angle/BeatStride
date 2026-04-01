@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type DragEventHandler } from 'react';
+import { WORKSPACE_TRACK_DRAG_MIME } from '@shared/constants';
 import { buildSingleTrackExportPlan } from '@shared/services/exportPlanService';
 import {
   buildProjectPreviewExportPlan,
   buildSingleTrackPreviewPlan
 } from '@shared/services/previewPlanService';
+import { getWorkspaceTracks } from '@shared/services/workspaceOrderService';
 import type { SingleTrackExportPlan, TrackProxyStatus } from '@shared/types';
 import { I18nProvider } from '@renderer/features/i18n/I18nProvider';
 import { ThemeProvider } from '@renderer/features/theme/ThemeProvider';
@@ -59,6 +61,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const project = projectStore.project;
   const tracks = project?.tracks ?? [];
+  const workspaceTracks = getWorkspaceTracks(tracks);
   const pendingTracks = tracks.filter((track) => !track.exportEnabled);
   const selectedTrack = tracks.find(
     (item) => item.id === projectStore.activeTimelineTrackId
@@ -74,6 +77,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
     }
     const currentProject = useProjectStore.getState().project;
     const analysisSeconds = currentProject?.mixTuning.analysisSeconds ?? 120;
+    const beatsPerBar = currentProject?.mixTuning.beatsPerBar ?? 4;
 
     setImporting(true);
     try {
@@ -81,16 +85,19 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
         paths.map(async (filePath) => {
           const [probe, tempo] = await Promise.all([
             window.beatStride.probeAudio(filePath),
-            window.beatStride.detectTempo(filePath, analysisSeconds).catch(() => ({
+            window.beatStride.detectTempo(filePath, analysisSeconds, beatsPerBar).catch(() => ({
               bpm: 0,
-              confidence: 0
+              confidence: 0,
+              firstBeatMs: 0,
+              downbeatOffsetMs: 0
             }))
           ]);
 
           return {
             filePath,
             probe,
-            detectedBpm: tempo.bpm > 0 ? tempo.bpm : undefined
+            detectedBpm: tempo.bpm > 0 ? tempo.bpm : undefined,
+            downbeatOffsetMs: tempo.downbeatOffsetMs > 0 ? tempo.downbeatOffsetMs : 0
           };
         })
       );
@@ -200,8 +207,8 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
       alert('当前进程还没有加载新的代理文件接口，请完全重启应用后再试。');
       return;
     }
-    const checkedWorkTracks = tracks.filter(
-      (track) => track.exportEnabled && projectStore.libraryCheckedIds.includes(track.id)
+    const checkedWorkTracks = workspaceTracks.filter((track) =>
+      projectStore.libraryCheckedIds.includes(track.id)
     );
     const targetTracks =
       checkedWorkTracks.length > 0
@@ -371,6 +378,11 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const handleDrop: DragEventHandler<HTMLDivElement> = (event) => {
     event.preventDefault();
+    const dragTypes = Array.from(event.dataTransfer.types ?? []);
+    if (dragTypes.includes(WORKSPACE_TRACK_DRAG_MIME)) {
+      event.currentTarget.classList.remove('drop-highlight');
+      return;
+    }
     const files = Array.from(event.dataTransfer.files)
       .map((file) => window.beatStride.getPathForDroppedFile(file))
       .filter((item): item is string => Boolean(item));
@@ -394,19 +406,18 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
           getTrackProxyStatuses?: typeof window.beatStride.getTrackProxyStatuses;
         }
       ).getTrackProxyStatuses;
+      const projectWorkspaceTracks = getWorkspaceTracks(project.tracks);
       if (typeof getTrackProxyStatusesApi !== 'function') {
         setProxyStatusByTrackId(
           Object.fromEntries(
-            project.tracks
-              .filter((track) => track.exportEnabled)
+            projectWorkspaceTracks
               .map((track) => [track.id, 'missing' satisfies TrackProxyStatus])
           )
         );
         return;
       }
 
-      const plans: SingleTrackExportPlan[] = project.tracks
-        .filter((track) => track.exportEnabled)
+      const plans: SingleTrackExportPlan[] = projectWorkspaceTracks
         .map((track) =>
           buildSingleTrackExportPlan(track, {
             globalTargetBpm: project.globalTargetBpm,
@@ -508,6 +519,14 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
         }}
         onDragOver={(event) => {
           event.preventDefault();
+          const dragTypes = Array.from(event.dataTransfer.types ?? []);
+          if (dragTypes.includes(WORKSPACE_TRACK_DRAG_MIME)) {
+            event.currentTarget.classList.remove('drop-highlight');
+            if (event.dataTransfer) {
+              event.dataTransfer.dropEffect = 'move';
+            }
+            return;
+          }
           if (event.dataTransfer) {
             event.dataTransfer.dropEffect = 'copy';
           }
@@ -568,7 +587,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
             onToggleTrackCheck={projectStore.toggleLibraryCheck}
             onToggleAllQueueChecked={(checked) =>
               projectStore.setLibraryCheckedIds(
-                checked ? tracks.filter((track) => track.exportEnabled).map((track) => track.id) : []
+                checked ? workspaceTracks.map((track) => track.id) : []
               )
             }
             onPlaySingle={() => {
@@ -600,11 +619,9 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
             proxyGenerationButtonTitle={formatProxyGenerationTitle()}
             onRemoveCheckedFromQueue={() =>
               projectStore.setTracksWorkEnabled(
-                tracks.filter(
-                  (track) =>
-                    track.exportEnabled &&
-                    projectStore.libraryCheckedIds.includes(track.id)
-                ).map((track) => track.id),
+                workspaceTracks
+                  .filter((track) => projectStore.libraryCheckedIds.includes(track.id))
+                  .map((track) => track.id),
                 false
               )
             }

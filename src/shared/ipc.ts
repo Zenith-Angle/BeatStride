@@ -46,7 +46,11 @@ export interface BeatStrideApi {
   saveRecovery(project: ProjectFile): Promise<boolean>;
   loadRecovery(): Promise<ProjectFile | null>;
   probeAudio(filePath: string): Promise<AudioProbeInfo>;
-  detectTempo(filePath: string, analysisSeconds: number): Promise<TempoAnalysisResult>;
+  detectTempo(
+    filePath: string,
+    analysisSeconds: number,
+    beatsPerBar?: number
+  ): Promise<TempoAnalysisResult>;
   preparePlaybackAudio(filePath: string): Promise<PreparedPlaybackAudio>;
   prepareSinglePreviewAudio(payload: {
     plan: SingleTrackExportPlan;

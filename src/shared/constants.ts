@@ -35,7 +35,7 @@ export const DEFAULT_EXPORT_PRESET: ExportPreset = {
 
 export const DEFAULT_MIX_TUNING: MixTuningSettings = {
   analysisSeconds: 120,
-  beatGainDb: 10,
+  beatGainDb: 0,
   beatOriginalBpm: 180,
   beatRenderMode: 'stretched-file',
   stretchEngine: 'auto',
@@ -73,3 +73,4 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export const DEFAULT_TIME_SIGNATURE = '4/4' as const;
 
 export const AUTO_SAVE_INTERVAL_MS = 4000;
+export const WORKSPACE_TRACK_DRAG_MIME = 'application/x-beatstride-work-track';

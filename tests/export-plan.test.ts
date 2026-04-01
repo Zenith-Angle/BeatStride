@@ -132,6 +132,56 @@ describe('buildMedleyExportPlan', () => {
     });
     expect(plan.clips).toHaveLength(1);
   });
+
+  test('combines tracks in workspace order', () => {
+    const project: ProjectFile = {
+      version: 1,
+      meta: {
+        id: 'p2',
+        name: 'Project',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      globalTargetBpm: 180,
+      timeSignature: '4/4',
+      defaultMetronomeSamplePath: '',
+      theme: 'light',
+      language: 'zh-CN',
+      tracks: [
+        { ...track, id: 't2', name: 'B.mp3', exportEnabled: true, inTimeline: true },
+        { ...track, id: 't3', name: 'C.mp3', exportEnabled: false, inTimeline: false },
+        { ...track, id: 't1', name: 'A.mp3', exportEnabled: true, inTimeline: true }
+      ],
+      exportPreset: {
+        mode: 'medley',
+        format: 'wav',
+        sampleRate: 48000,
+        bitrateKbps: 320,
+        outputDir: '',
+        fileSuffix: '',
+        normalizeLoudness: false,
+        gapMs: 0,
+        crossfadeMs: 0
+      },
+      mixTuning: {
+        ...DEFAULT_MIX_TUNING
+      }
+    };
+
+    const plan = buildMedleyExportPlan(project, {
+      globalTargetBpm: project.globalTargetBpm,
+      outputDir: 'C:/exports',
+      format: 'mp3',
+      metronomeSamplePath: '',
+      normalizeLoudness: false,
+      gapMs: 0,
+      crossfadeMs: 0,
+      mixTuning: project.mixTuning
+    });
+
+    expect(plan.clips.map((clip) => clip.track.trackId)).toEqual(['t2', 't1']);
+    expect(plan.clips.map((clip) => clip.track.trackName)).toEqual(['B.mp3', 'A.mp3']);
+  });
 });
 
 describe('buildOutputFileName', () => {

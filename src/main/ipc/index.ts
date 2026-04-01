@@ -243,7 +243,7 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     IPC_CHANNELS.audioDetectTempo,
-    async (_, payload: { filePath: string; analysisSeconds: number }) => {
+    async (_, payload: { filePath: string; analysisSeconds: number; beatsPerBar?: number }) => {
       const settings = settingsService.load();
       if (!settings.ffmpeg.available || !settings.ffmpeg.ffmpegPath) {
         throw new Error('ffmpeg not available');
@@ -251,7 +251,8 @@ export function registerIpcHandlers(): void {
       return detectTempo(
         settings.ffmpeg.ffmpegPath,
         payload.filePath,
-        payload.analysisSeconds
+        payload.analysisSeconds,
+        payload.beatsPerBar
       );
     }
   );

@@ -3,6 +3,10 @@ import type { AudioProbeInfo, ProjectFile, Track } from '@shared/types';
 import { AUTO_SAVE_INTERVAL_MS } from '@shared/constants';
 import { computeSpeedRatio } from '@shared/utils/tempo';
 import {
+  moveWorkspaceTrack,
+  reorderWorkspaceTrack
+} from '@shared/services/workspaceOrderService';
+import {
   DEFAULT_EXPORT_PRESET,
   LEGACY_DEFAULT_METRONOME_SAMPLE_PATH,
   DEFAULT_METRONOME_SAMPLE_PATH,
@@ -25,7 +29,12 @@ interface ProjectState {
   saveProjectAs: () => Promise<void>;
   loadRecovery: () => Promise<void>;
   addTracksFromFiles: (
-    items: Array<{ filePath: string; probe: AudioProbeInfo; detectedBpm?: number }>
+    items: Array<{
+      filePath: string;
+      probe: AudioProbeInfo;
+      detectedBpm?: number;
+      downbeatOffsetMs?: number;
+    }>
   ) => void;
   addTracksFromFolder: () => Promise<void>;
   patchProject: (patch: Partial<ProjectFile>) => void;
@@ -47,6 +56,7 @@ interface ProjectState {
   undo: () => void;
   redo: () => void;
   markClean: () => void;
+  autosaveProjectFile: () => Promise<boolean>;
   autosaveRecovery: () => Promise<void>;
 }
 
@@ -100,6 +110,7 @@ function applyTrackPatch(track: Track, patch: Partial<Track>, globalTargetBpm: n
 }
 
 let autoSaveTimer: ReturnType<typeof setInterval> | null = null;
+let autoSaveInFlight = false;
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
   project: null,
@@ -216,7 +227,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         sourceBpm: item.detectedBpm || sourceBpm,
         targetBpm: undefined,
         speedRatio: computeSpeedRatio(item.detectedBpm || sourceBpm, sourceBpm),
-        downbeatOffsetMs: 0,
+        downbeatOffsetMs: item.downbeatOffsetMs ?? 0,
         metronomeOffsetMs: 0,
         trackStartMs: 0,
         trimInMs: 0,
@@ -410,22 +421,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!state.project) {
       return;
     }
-    const workTracks = state.project.tracks.filter((track) => track.exportEnabled);
-    const currentWorkIndex = workTracks.findIndex((track) => track.id === trackId);
-    if (currentWorkIndex < 0) {
+    const nextTracks = moveWorkspaceTrack(state.project.tracks, trackId, direction);
+    if (!nextTracks) {
       return;
     }
-    const targetWorkIndex = direction === 'up' ? currentWorkIndex - 1 : currentWorkIndex + 1;
-    if (targetWorkIndex < 0 || targetWorkIndex >= workTracks.length) {
-      return;
-    }
-
     const prev = cloneProject(state.project);
-    const nextWorkTracks = [...workTracks];
-    const [track] = nextWorkTracks.splice(currentWorkIndex, 1);
-    nextWorkTracks.splice(targetWorkIndex, 0, track!);
-    const pendingTracks = state.project.tracks.filter((item) => !item.exportEnabled);
-    const nextTracks = [...pendingTracks, ...nextWorkTracks];
 
     set({
       project: {
@@ -443,34 +443,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!state.project || trackId === targetTrackId) {
       return;
     }
-    const workTracks = state.project.tracks.filter((track) => track.exportEnabled);
-    const sourceIndex = workTracks.findIndex((track) => track.id === trackId);
-    const rawTargetIndex = workTracks.findIndex((track) => track.id === targetTrackId);
-    if (sourceIndex < 0 || rawTargetIndex < 0) {
+    const nextTracks = reorderWorkspaceTrack(
+      state.project.tracks,
+      trackId,
+      targetTrackId,
+      placement
+    );
+    if (!nextTracks) {
       return;
     }
 
     const prev = cloneProject(state.project);
-    const nextWorkTracks = [...workTracks];
-    const [draggedTrack] = nextWorkTracks.splice(sourceIndex, 1);
-    if (!draggedTrack) {
-      return;
-    }
-
-    let targetIndex = nextWorkTracks.findIndex((track) => track.id === targetTrackId);
-    if (targetIndex < 0) {
-      targetIndex = nextWorkTracks.length;
-    }
-    if (placement === 'after') {
-      targetIndex += 1;
-    }
-    nextWorkTracks.splice(Math.max(0, Math.min(targetIndex, nextWorkTracks.length)), 0, draggedTrack);
-
-    const pendingTracks = state.project.tracks.filter((item) => !item.exportEnabled);
     set({
       project: {
         ...state.project,
-        tracks: [...pendingTracks, ...nextWorkTracks],
+        tracks: nextTracks,
         meta: { ...state.project.meta, updatedAt: new Date().toISOString() }
       },
       undoStack: [...state.undoStack, prev].slice(-50),
@@ -510,12 +497,65 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
   markClean: () => set({ dirty: false }),
+  autosaveProjectFile: async () => {
+    const state = get();
+    const project = state.project;
+    const projectFilePath = project?.meta.filePath;
+    if (!project || !projectFilePath) {
+      return false;
+    }
+    const snapshotUpdatedAt = project.meta.updatedAt;
+
+    try {
+      const saved = await window.beatStride.saveProject({
+        project,
+        filePath: projectFilePath
+      });
+      if (!saved) {
+        return false;
+      }
+
+      set((current) => {
+        if (!current.project) {
+          return {};
+        }
+        if (current.project.meta.updatedAt !== snapshotUpdatedAt) {
+          return {
+            lastSavedAt: new Date().toISOString()
+          };
+        }
+        return {
+          project: saved,
+          dirty: false,
+          lastSavedAt: new Date().toISOString()
+        };
+      });
+      console.info('[BeatStride][autosave]', {
+        mode: 'project-file',
+        status: 'saved',
+        filePath: projectFilePath
+      });
+      return true;
+    } catch (error) {
+      console.info('[BeatStride][autosave]', {
+        mode: 'project-file',
+        status: 'failed',
+        filePath: projectFilePath,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return false;
+    }
+  },
   autosaveRecovery: async () => {
     const project = get().project;
     if (!project) {
       return;
     }
     await window.beatStride.saveRecovery(project);
+    console.info('[BeatStride][autosave]', {
+      mode: 'recovery',
+      status: 'saved'
+    });
   }
 }));
 
@@ -524,9 +564,24 @@ export function startProjectAutosave(): void {
     return;
   }
   autoSaveTimer = setInterval(() => {
+    if (autoSaveInFlight) {
+      return;
+    }
     const state = useProjectStore.getState();
     if (state.project && state.dirty) {
-      void state.autosaveRecovery();
+      autoSaveInFlight = true;
+      void (async () => {
+        try {
+          const savedProjectFile = await state.autosaveProjectFile();
+          if (!savedProjectFile) {
+            await state.autosaveRecovery();
+            return;
+          }
+          await state.autosaveRecovery();
+        } finally {
+          autoSaveInFlight = false;
+        }
+      })();
     }
   }, AUTO_SAVE_INTERVAL_MS);
 }
@@ -537,4 +592,5 @@ export function stopProjectAutosave(): void {
   }
   clearInterval(autoSaveTimer);
   autoSaveTimer = null;
+  autoSaveInFlight = false;
 }

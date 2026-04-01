@@ -433,23 +433,43 @@ async function createMetronomeTrack(
 
   const sampleExists = Boolean(samplePath && fs.existsSync(samplePath));
   if (options.beatRenderMode === 'stretched-file' && sampleExists) {
+    if (beatTimesMs.length === 0) {
+      await createSilence(ffmpegPath, durationMs, outputPath);
+      return;
+    }
+
     const ratio =
       options.beatOriginalBpm > 0 ? options.metronomeBpm / options.beatOriginalBpm : 1;
+    const firstBeatMs = Math.max(0, Math.round(beatTimesMs[0] ?? 0));
+    const activeDurationMs = Math.max(0, durationMs - firstBeatMs);
+    if (activeDurationMs <= 0) {
+      await createSilence(ffmpegPath, durationMs, outputPath);
+      return;
+    }
+
+    const filter =
+      `[0:a]${buildAtempoFilter(Math.max(0.01, ratio))},` +
+      `atrim=0:${msToSec(activeDurationMs)},asetpts=PTS-STARTPTS,` +
+      `adelay=${firstBeatMs}|${firstBeatMs},atrim=0:${msToSec(durationMs)}[out]`;
+    const filterGraph = createFilterGraphArgs(filter, path.dirname(outputPath), 'metronome-file');
     const args = [
       '-y',
       '-stream_loop',
       '-1',
       '-i',
       samplePath,
-      '-t',
-      `${msToSec(durationMs)}`,
-      '-filter:a',
-      buildAtempoFilter(Math.max(0.01, ratio)),
+      ...filterGraph.args,
+      '-map',
+      '[out]',
       '-c:a',
       'pcm_s16le',
       outputPath
     ];
-    await runFfmpeg(ffmpegPath, args, durationMs);
+    try {
+      await runFfmpeg(ffmpegPath, args, durationMs);
+    } finally {
+      filterGraph.cleanup();
+    }
     return;
   }
 

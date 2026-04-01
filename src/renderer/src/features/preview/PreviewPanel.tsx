@@ -5,7 +5,7 @@ import {
   useState,
   type ChangeEvent,
   type CSSProperties,
-  type DragEvent
+  type PointerEvent as ReactPointerEvent
 } from 'react';
 import {
   AlarmClock,
@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import type { ProjectFile, Track, TrackProxyStatus } from '@shared/types';
 import { buildProjectPreviewPlan, buildSingleTrackPreviewPlan } from '@shared/services/previewPlanService';
+import { getWorkspaceTracks } from '@shared/services/workspaceOrderService';
 import { formatMs } from '@shared/utils/time';
 import type { PreviewMode, PreviewTarget } from '@renderer/stores/playbackStore';
 
@@ -92,10 +93,30 @@ export function PreviewPanel({
   proxyGenerationButtonTitle,
   onRemoveCheckedFromQueue
 }: PreviewPanelProps) {
+  const EDGE_AUTO_SCROLL_THRESHOLD_PX = 44;
+  const EDGE_AUTO_SCROLL_HOLD_MS = 220;
+  const EDGE_AUTO_SCROLL_MIN_STEP_PX = 4;
+  const EDGE_AUTO_SCROLL_MAX_STEP_PX = 22;
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const queueListRef = useRef<HTMLDivElement | null>(null);
   const previewSeekRef = useRef<HTMLInputElement | null>(null);
   const scrubbingRef = useRef(false);
   const scrubValueRef = useRef(0);
+  const dragPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const queueTrackIdsRef = useRef<string[]>([]);
+  const draggingTrackIdRef = useRef<string | null>(null);
+  const pointerDragStateRef = useRef<{
+    trackId: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    started: boolean;
+  } | null>(null);
+  const reorderWorkTrackRef = useRef(onReorderTrack);
+  const dropTargetRef = useRef<{ trackId: string; placement: 'before' | 'after' } | null>(null);
+  const edgeScrollDirectionRef = useRef<-1 | 0 | 1>(0);
+  const edgeScrollEnteredAtRef = useRef(0);
+  const edgeAutoScrollFrameRef = useRef<number | null>(null);
   const [auditionHeight, setAuditionHeight] = useState(220);
   const [resizing, setResizing] = useState(false);
   const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
@@ -110,7 +131,7 @@ export function PreviewPanel({
         : proxyStatus === 'stale'
           ? '代理已过期'
           : '未生成代理';
-  const queueTracks = project.tracks.filter((track) => track.exportEnabled);
+  const queueTracks = getWorkspaceTracks(project.tracks);
   const queuePlans = buildProjectPreviewPlan(project);
   const selectedPlan = selectedTrack ? buildSingleTrackPreviewPlan(selectedTrack, project) : null;
   const singleDurationMs =
@@ -230,6 +251,98 @@ export function PreviewPanel({
     }
   ];
 
+  const updateDropTargetState = useEffectEvent((
+    next: { trackId: string; placement: 'before' | 'after' } | null
+  ) => {
+    const previous = dropTargetRef.current;
+    if (
+      previous?.trackId === next?.trackId &&
+      previous?.placement === next?.placement
+    ) {
+      return;
+    }
+    dropTargetRef.current = next;
+    setDropTarget(next);
+  });
+
+  const clearDragRuntime = useEffectEvent(() => {
+    pointerDragStateRef.current = null;
+    draggingTrackIdRef.current = null;
+    dragPointerRef.current = null;
+    edgeScrollDirectionRef.current = 0;
+    edgeScrollEnteredAtRef.current = 0;
+    setDraggedTrackId(null);
+    updateDropTargetState(null);
+  });
+
+  const updateDropTargetByPointer = useEffectEvent((sourceTrackId: string, x: number, y: number) => {
+    const list = queueListRef.current;
+    if (!list) {
+      updateDropTargetState(null);
+      return;
+    }
+
+    const rect = list.getBoundingClientRect();
+    const insideList = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    if (!insideList) {
+      updateDropTargetState(null);
+      return;
+    }
+
+    const pointerElement = document.elementFromPoint(x, y) as HTMLElement | null;
+    const itemElement = pointerElement?.closest('[data-work-track-id]') as HTMLElement | null;
+    const itemTrackId = itemElement?.dataset.workTrackId;
+
+    if (itemElement && itemTrackId) {
+      if (itemTrackId === sourceTrackId) {
+        updateDropTargetState(null);
+        return;
+      }
+      const itemRect = itemElement.getBoundingClientRect();
+      const placement = y < itemRect.top + itemRect.height / 2 ? 'before' : 'after';
+      updateDropTargetState({
+        trackId: itemTrackId,
+        placement
+      });
+      return;
+    }
+
+    const trackIds = queueTrackIdsRef.current;
+    const firstTrackId = trackIds[0];
+    const lastTrackId = trackIds.at(-1);
+    if (!firstTrackId || !lastTrackId) {
+      updateDropTargetState(null);
+      return;
+    }
+    const placeBeforeAll = y < rect.top + rect.height / 2;
+    const targetTrackId = placeBeforeAll ? firstTrackId : lastTrackId;
+    if (targetTrackId === sourceTrackId) {
+      updateDropTargetState(null);
+      return;
+    }
+    updateDropTargetState({
+      trackId: targetTrackId,
+      placement: placeBeforeAll ? 'before' : 'after'
+    });
+  });
+
+  const finalizePointerDrag = useEffectEvent((sourceTrackId: string) => {
+    const target = dropTargetRef.current;
+    clearDragRuntime();
+    if (!target || sourceTrackId === target.trackId) {
+      return;
+    }
+    reorderWorkTrackRef.current(sourceTrackId, target.trackId, target.placement);
+  });
+
+  useEffect(() => {
+    queueTrackIdsRef.current = queueTracks.map((track) => track.id);
+  }, [queueTracks]);
+
+  useEffect(() => {
+    reorderWorkTrackRef.current = onReorderTrack;
+  }, [onReorderTrack]);
+
   useEffect(() => {
     if (isScrubbing) {
       return;
@@ -298,30 +411,279 @@ export function PreviewPanel({
     };
   }, [resizing]);
 
-  const handleQueueDragOver = (
-    event: DragEvent<HTMLButtonElement>,
+  useEffect(() => {
+    draggingTrackIdRef.current = draggedTrackId;
+    if (!draggedTrackId) {
+      edgeScrollDirectionRef.current = 0;
+      edgeScrollEnteredAtRef.current = 0;
+    }
+  }, [draggedTrackId]);
+
+  useEffect(() => {
+    const normalizeWheelDeltaY = (
+      event: WheelEvent,
+      list: HTMLDivElement
+    ): number => {
+      if (event.deltaMode === 1) {
+        return event.deltaY * 16;
+      }
+      if (event.deltaMode === 2) {
+        return event.deltaY * list.clientHeight;
+      }
+      return event.deltaY;
+    };
+
+    const applyDragWheelScroll = (event: Event, source: 'wheel' | 'mousewheel') => {
+      const draggedTrackId = draggingTrackIdRef.current;
+      if (!draggedTrackId) {
+        return;
+      }
+      const list = queueListRef.current;
+      if (!list) {
+        return;
+      }
+
+      const wheelEvent = event as WheelEvent & { wheelDelta?: number };
+      const fallbackDelta =
+        typeof wheelEvent.wheelDelta === 'number' ? -wheelEvent.wheelDelta : 0;
+      const rawDeltaY =
+        wheelEvent.deltaY !== undefined
+          ? normalizeWheelDeltaY(wheelEvent, list)
+          : fallbackDelta;
+      if (!Number.isFinite(rawDeltaY) || rawDeltaY === 0) {
+        return;
+      }
+
+      const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+      const before = list.scrollTop;
+      const next = Math.max(0, Math.min(maxScrollTop, before + rawDeltaY));
+      list.scrollTop = next;
+      console.info('[BeatStride][drag-wheel]', {
+        source,
+        draggedTrackId,
+        rawDeltaY,
+        before,
+        after: list.scrollTop,
+        maxScrollTop
+      });
+      if (next === before) {
+        return;
+      }
+      event.preventDefault();
+    };
+
+    const handleWheelWhileDragging = (event: WheelEvent) => {
+      applyDragWheelScroll(event, 'wheel');
+    };
+
+    const handleMouseWheelWhileDragging = (event: Event) => {
+      applyDragWheelScroll(event, 'mousewheel');
+    };
+
+    window.addEventListener('wheel', handleWheelWhileDragging, {
+      passive: false,
+      capture: true
+    });
+    window.addEventListener('mousewheel', handleMouseWheelWhileDragging, {
+      passive: false,
+      capture: true
+    });
+    document.addEventListener('wheel', handleWheelWhileDragging, {
+      passive: false,
+      capture: true
+    });
+    document.addEventListener('mousewheel', handleMouseWheelWhileDragging, {
+      passive: false,
+      capture: true
+    });
+    return () => {
+      window.removeEventListener('wheel', handleWheelWhileDragging, true);
+      window.removeEventListener('mousewheel', handleMouseWheelWhileDragging, true);
+      document.removeEventListener('wheel', handleWheelWhileDragging, true);
+      document.removeEventListener('mousewheel', handleMouseWheelWhileDragging, true);
+    };
+  }, []);
+
+  useEffect(() => {
+    const DRAG_START_THRESHOLD_PX = 4;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const state = pointerDragStateRef.current;
+      if (!state || state.pointerId !== event.pointerId) {
+        return;
+      }
+
+      dragPointerRef.current = { x: event.clientX, y: event.clientY };
+
+      if (!state.started) {
+        const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
+        if (distance < DRAG_START_THRESHOLD_PX) {
+          return;
+        }
+        state.started = true;
+        draggingTrackIdRef.current = state.trackId;
+        setDraggedTrackId(state.trackId);
+        console.info('[BeatStride][drag-wheel]', {
+          status: 'drag-start',
+          trackId: state.trackId,
+          mode: 'pointer'
+        });
+      }
+
+      updateDropTargetByPointer(state.trackId, event.clientX, event.clientY);
+      event.preventDefault();
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const state = pointerDragStateRef.current;
+      if (!state || state.pointerId !== event.pointerId) {
+        return;
+      }
+
+      if (state.started) {
+        finalizePointerDrag(state.trackId);
+        console.info('[BeatStride][drag-wheel]', {
+          status: 'drag-end',
+          trackId: state.trackId,
+          mode: 'pointer'
+        });
+      } else {
+        pointerDragStateRef.current = null;
+      }
+    };
+
+    const handlePointerCancel = (event: PointerEvent) => {
+      const state = pointerDragStateRef.current;
+      if (!state || state.pointerId !== event.pointerId) {
+        return;
+      }
+      clearDragRuntime();
+      console.info('[BeatStride][drag-wheel]', {
+        status: 'drag-cancel',
+        trackId: state.trackId,
+        mode: 'pointer'
+      });
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, {
+      passive: false,
+      capture: true
+    });
+    window.addEventListener('pointerup', handlePointerUp, true);
+    window.addEventListener('pointercancel', handlePointerCancel, true);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove, true);
+      window.removeEventListener('pointerup', handlePointerUp, true);
+      window.removeEventListener('pointercancel', handlePointerCancel, true);
+    };
+  }, [clearDragRuntime, finalizePointerDrag, updateDropTargetByPointer]);
+
+  useEffect(() => {
+    const tick = () => {
+      const draggedTrackId = draggingTrackIdRef.current;
+      const list = queueListRef.current;
+      const pointer = dragPointerRef.current;
+      if (!draggedTrackId || !list || !pointer) {
+        edgeScrollDirectionRef.current = 0;
+        edgeScrollEnteredAtRef.current = 0;
+        edgeAutoScrollFrameRef.current = window.requestAnimationFrame(tick);
+        return;
+      }
+
+      const rect = list.getBoundingClientRect();
+      const pointerInsideList =
+        pointer.x >= rect.left &&
+        pointer.x <= rect.right &&
+        pointer.y >= rect.top &&
+        pointer.y <= rect.bottom;
+
+      let nextDirection: -1 | 0 | 1 = 0;
+      let distanceToEdge = EDGE_AUTO_SCROLL_THRESHOLD_PX;
+      if (pointerInsideList) {
+        const distanceToTop = pointer.y - rect.top;
+        const distanceToBottom = rect.bottom - pointer.y;
+        if (distanceToTop < EDGE_AUTO_SCROLL_THRESHOLD_PX) {
+          nextDirection = -1;
+          distanceToEdge = distanceToTop;
+        } else if (distanceToBottom < EDGE_AUTO_SCROLL_THRESHOLD_PX) {
+          nextDirection = 1;
+          distanceToEdge = distanceToBottom;
+        }
+      }
+
+      if (nextDirection !== edgeScrollDirectionRef.current) {
+        edgeScrollDirectionRef.current = nextDirection;
+        edgeScrollEnteredAtRef.current =
+          nextDirection === 0 ? 0 : performance.now();
+        console.info('[BeatStride][drag-autoscroll]', {
+          trackId: draggedTrackId,
+          status: nextDirection === 0 ? 'edge-leave' : 'edge-enter',
+          direction: nextDirection
+        });
+      }
+
+      if (nextDirection !== 0) {
+        const heldMs = performance.now() - edgeScrollEnteredAtRef.current;
+        if (heldMs >= EDGE_AUTO_SCROLL_HOLD_MS) {
+          const intensity = Math.max(
+            0,
+            Math.min(
+              1,
+              (EDGE_AUTO_SCROLL_THRESHOLD_PX - Math.max(0, distanceToEdge)) /
+                EDGE_AUTO_SCROLL_THRESHOLD_PX
+            )
+          );
+          const step =
+            EDGE_AUTO_SCROLL_MIN_STEP_PX +
+            (EDGE_AUTO_SCROLL_MAX_STEP_PX - EDGE_AUTO_SCROLL_MIN_STEP_PX) *
+              intensity;
+          const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+          const before = list.scrollTop;
+          const after = Math.max(
+            0,
+            Math.min(maxScrollTop, before + nextDirection * step)
+          );
+          if (after !== before) {
+            list.scrollTop = after;
+          }
+        }
+      }
+
+      if (pointer) {
+        updateDropTargetByPointer(draggedTrackId, pointer.x, pointer.y);
+      }
+
+      edgeAutoScrollFrameRef.current = window.requestAnimationFrame(tick);
+    };
+
+    edgeAutoScrollFrameRef.current = window.requestAnimationFrame(tick);
+    return () => {
+      if (edgeAutoScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(edgeAutoScrollFrameRef.current);
+      }
+      edgeAutoScrollFrameRef.current = null;
+    };
+  }, [updateDropTargetByPointer]);
+
+  const handleQueuePointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
     trackId: string
   ) => {
-    if (!draggedTrackId || draggedTrackId === trackId) {
+    if (event.button !== 0) {
       return;
     }
-    event.preventDefault();
-    const rect = event.currentTarget.getBoundingClientRect();
-    const placement = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
-    setDropTarget({ trackId, placement });
-  };
-
-  const handleQueueDrop = (event: DragEvent<HTMLButtonElement>, trackId: string) => {
-    event.preventDefault();
-    const sourceTrackId = draggedTrackId;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const placement = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
-    setDraggedTrackId(null);
-    setDropTarget(null);
-    if (!sourceTrackId || sourceTrackId === trackId) {
+    const target = event.target as HTMLElement;
+    if (target.closest('.preview-item-check')) {
       return;
     }
-    onReorderTrack(sourceTrackId, trackId, placement);
+    pointerDragStateRef.current = {
+      trackId,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      started: false
+    };
+    dragPointerRef.current = { x: event.clientX, y: event.clientY };
   };
 
   const startPreviewSeek = () => {
@@ -386,7 +748,10 @@ export function PreviewPanel({
               </button>
             </div>
           </div>
-          <div className="preview-canvas-list">
+          <div
+            ref={queueListRef}
+            className="preview-canvas-list"
+          >
             {queueTracks.length === 0 ? (
               <div className="preview-canvas-empty">将左侧勾选歌曲加入这里，形成串烧/试听顺序</div>
             ) : (
@@ -400,21 +765,10 @@ export function PreviewPanel({
                 return (
                   <button
                     key={track.id}
+                    data-work-track-id={track.id}
                     className={`preview-canvas-item ${selected ? 'selected' : ''} ${active ? 'active' : ''} ${draggedTrackId === track.id ? 'dragging' : ''} ${dropTarget?.trackId === track.id ? `drop-${dropTarget.placement}` : ''}`}
                     onClick={() => onSelectTrack(track.id)}
-                    draggable
-                    onDragStart={(event) => {
-                      setDraggedTrackId(track.id);
-                      setDropTarget(null);
-                      event.dataTransfer.effectAllowed = 'move';
-                      event.dataTransfer.setData('text/plain', track.id);
-                    }}
-                    onDragEnd={() => {
-                      setDraggedTrackId(null);
-                      setDropTarget(null);
-                    }}
-                    onDragOver={(event) => handleQueueDragOver(event, track.id)}
-                    onDrop={(event) => handleQueueDrop(event, track.id)}
+                    onPointerDown={(event) => handleQueuePointerDown(event, track.id)}
                   >
                     <div className="preview-canvas-item-main">
                       <div

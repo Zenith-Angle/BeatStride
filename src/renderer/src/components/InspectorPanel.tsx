@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ProjectFile, Track } from '@shared/types';
 import { useI18n } from '@renderer/features/i18n/I18nProvider';
 import { AlignmentPanel } from '@renderer/features/alignment/AlignmentPanel';
@@ -64,12 +64,14 @@ export function InspectorPanel({
     try {
       const result = await window.beatStride.detectTempo(
         track.filePath,
-        project.mixTuning.analysisSeconds
+        project.mixTuning.analysisSeconds,
+        project.mixTuning.beatsPerBar
       );
       if (result.bpm > 0) {
         onUpdateTrack(track.id, {
           detectedBpm: result.bpm,
-          sourceBpm: result.bpm
+          sourceBpm: result.bpm,
+          downbeatOffsetMs: result.downbeatOffsetMs
         });
       }
     } finally {
@@ -163,7 +165,7 @@ export function InspectorPanel({
               <p className="muted inspector-summary-card">选中工作区歌曲后，这里会显示实际映射结果。</p>
             )}
             <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-              上半区域保留全局基准；下半区域改为脚本同源的微调参数。
+              自动分析会优先估计 BPM 和首拍位置；下半区域只保留少量保底微调。
             </p>
           </div>
         </div>
@@ -175,126 +177,37 @@ export function InspectorPanel({
           <h4 style={{ margin: 0, marginBottom: 10 }}>微调面板</h4>
           <div className="inspector-section-grid">
             <section className="inspector-form-section">
-              <strong>节拍与变速</strong>
+              <strong>自动对齐与节拍器</strong>
               <div className="properties-grid">
-                <label className="field inline">
-                  <FieldLabel
-                    text="分析时长(s)"
-                    help="导入歌曲或手动重分析 BPM 时，会只分析前多少秒；设为 0 或更大值会增加分析时间。"
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={project.mixTuning.analysisSeconds}
-                    onChange={(event) =>
-                      updateMixTuning('analysisSeconds', Math.max(0, Number(event.target.value) || 0))
-                    }
-                  />
-                </label>
-                <label className="field inline">
-                  <FieldLabel
-                    text="变速引擎"
-                    help="auto 会优先尝试 rubberband，失败时退回 atempo。该项影响试听与导出的变速质量和兼容性。"
-                  />
-                  <select
-                    value={project.mixTuning.stretchEngine}
-                    onChange={(event) =>
-                      updateMixTuning('stretchEngine', event.target.value as ProjectFile['mixTuning']['stretchEngine'])
-                    }
-                  >
-                    <option value="auto">auto</option>
-                    <option value="rubberband">rubberband</option>
-                    <option value="atempo">atempo</option>
-                  </select>
-                </label>
-                <label className="field inline">
-                  <FieldLabel
-                    text="拍子渲染"
-                    help="crisp-click 会生成更干脆的 click；sampled-click 更柔和；stretched-file 会把节拍器素材整段拉伸到目标 BPM。"
-                  />
-                  <select
-                    value={project.mixTuning.beatRenderMode}
-                    onChange={(event) =>
-                      updateMixTuning('beatRenderMode', event.target.value as ProjectFile['mixTuning']['beatRenderMode'])
-                    }
-                  >
-                    <option value="crisp-click">crisp-click</option>
-                    <option value="sampled-click">sampled-click</option>
-                    <option value="stretched-file">stretched-file</option>
-                  </select>
-                </label>
-                <label className="field inline">
+                <label className="field db-slider-field">
                   <FieldLabel
                     text="拍子增益(dB)"
-                    help="控制叠加到歌曲上的节拍器整体音量。数值越大，导出时 click 越明显。"
+                    help="控制叠加到歌曲上的节拍器整体音量。默认 0 dB，可在 -10 dB 到 10 dB 之间微调。"
                   />
-                  <input
-                    type="number"
-                    step={0.5}
-                    value={project.mixTuning.beatGainDb}
-                    onChange={(event) =>
-                      updateMixTuning('beatGainDb', Number(event.target.value) || 0)
-                    }
-                  />
-                </label>
-                <label className="field inline">
-                  <FieldLabel
-                    text="拍子素材 BPM"
-                    help="当前节拍器素材原始录制的 BPM。只有 stretched-file 模式会直接依赖这个值。"
-                  />
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={project.mixTuning.beatOriginalBpm}
-                    onChange={(event) =>
-                      updateMixTuning('beatOriginalBpm', Math.max(1, Number(event.target.value) || 180))
-                    }
-                  />
-                </label>
-                <label className="field inline">
-                  <FieldLabel
-                    text="映射容差"
-                    help="判断检测到的 BPM 是否应该按 half-time 或 double-time 解释的容差。值越大，系统越容易把 90 识别成 180 网格。"
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={project.mixTuning.harmonicTolerance}
-                    onChange={(event) =>
-                      updateMixTuning('harmonicTolerance', Math.max(0, Number(event.target.value) || 0))
-                    }
-                  />
-                </label>
-                <label className="field inline">
-                  <FieldLabel
-                    text="Half-time 阈值"
-                    help="当检测 BPM 小于等于这个值时，会优先尝试按半拍解释，再映射到全局目标 BPM。"
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={project.mixTuning.halfMapUpperBpm}
-                    onChange={(event) =>
-                      updateMixTuning('halfMapUpperBpm', Math.max(0, Number(event.target.value) || 0))
-                    }
-                  />
-                </label>
-                <label className="field inline checkbox-field">
-                  <FieldLabel
-                    text="启用半拍/倍拍映射"
-                    help="开启后，系统会自动把 90/180、87/174 这类常见 half-time / double-time 关系折算到目标网格。"
-                  />
-                  <input
-                    type="checkbox"
-                    checked={project.mixTuning.harmonicMappingEnabled}
-                    onChange={(event) =>
-                      updateMixTuning('harmonicMappingEnabled', event.target.checked)
-                    }
-                  />
+                  <div className="db-slider-row">
+                    <span className="db-slider-boundary">-10</span>
+                    <input
+                      className="db-slider-input"
+                      type="range"
+                      min={-10}
+                      max={10}
+                      step={0.5}
+                      value={project.mixTuning.beatGainDb}
+                      style={
+                        {
+                          '--slider-percent': `${((project.mixTuning.beatGainDb + 10) / 20) * 100}%`
+                        } as CSSProperties
+                      }
+                      onChange={(event) =>
+                        updateMixTuning('beatGainDb', Number(event.target.value) || 0)
+                      }
+                    />
+                    <span className="db-slider-boundary">10</span>
+                    <strong className="db-slider-value">
+                      {project.mixTuning.beatGainDb > 0 ? '+' : ''}
+                      {project.mixTuning.beatGainDb.toFixed(1)} dB
+                    </strong>
+                  </div>
                 </label>
               </div>
             </section>

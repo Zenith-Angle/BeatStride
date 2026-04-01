@@ -2469,6 +2469,103 @@ select {
   letter-spacing: 0.04em;
 }
 
+.db-slider-field {
+  gap: 10px;
+}
+
+.db-slider-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 28px auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.db-slider-boundary {
+  color: var(--text-subtle);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.db-slider-value {
+  min-width: 72px;
+  text-align: right;
+  font-size: 13px;
+}
+
+.db-slider-input {
+  --slider-percent: 50%;
+  width: 100%;
+  height: 8px;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.db-slider-input::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--primary) 92%, var(--accent)) 0 var(--slider-percent),
+    color-mix(in srgb, var(--surface-stone) 48%, var(--bg)) var(--slider-percent) 100%
+  );
+}
+
+.db-slider-input::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  margin-top: -4px;
+  border: 2px solid color-mix(in srgb, var(--surface-paper) 92%, #ffffff);
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    var(--primary),
+    color-mix(in srgb, var(--accent) 72%, var(--primary))
+  );
+  box-shadow:
+    0 4px 12px rgba(var(--shadow-color-rgb), 0.18),
+    inset 0 1px 1px rgba(255, 255, 255, 0.46);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.db-slider-input::-moz-range-track {
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-stone) 48%, var(--bg));
+}
+
+.db-slider-input::-moz-range-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--primary) 92%, var(--accent)),
+    color-mix(in srgb, var(--accent) 72%, var(--primary))
+  );
+}
+
+.db-slider-input::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 2px solid color-mix(in srgb, var(--surface-paper) 92%, #ffffff);
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    var(--primary),
+    color-mix(in srgb, var(--accent) 72%, var(--primary))
+  );
+  box-shadow:
+    0 4px 12px rgba(var(--shadow-color-rgb), 0.18),
+    inset 0 1px 1px rgba(255, 255, 255, 0.46);
+}
+
 .checkbox-field input[type='checkbox'] {
   width: auto;
   justify-self: start;
@@ -2478,6 +2575,16 @@ select {
 .alignment-panel {
   border-top: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface-water) 8%, transparent), transparent 34%);
+}
+
+.alignment-readonly-value {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, var(--surface-paper));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, #fff);
 }
 
 .alignment-action-grid {

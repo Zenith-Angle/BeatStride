@@ -12,6 +12,7 @@ import type {
 import { alignMetronomeToDownbeat } from './alignmentService';
 import { generateBeatTimes } from './beatGridService';
 import { buildOutputFileName } from '../utils/fileName';
+import { getWorkspaceTracks } from './workspaceOrderService';
 
 const DEFAULT_SUFFIX_RULES: ExportSuffixRules = {
   includeBpm: true,
@@ -117,7 +118,7 @@ export function buildMedleyExportPlan(
   settings: ExportBuildSettings
 ): MedleyExportPlan {
   const clips: MedleyClipPlan[] = [];
-  const enabledTracks = project.tracks.filter((t) => t.exportEnabled);
+  const enabledTracks = getWorkspaceTracks(project.tracks);
   const mixTuning = settings.mixTuning;
   const crossfadeMs =
     settings.crossfadeMs ?? computeTransitionMs(project.globalTargetBpm, mixTuning);

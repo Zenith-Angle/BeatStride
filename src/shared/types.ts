@@ -217,6 +217,8 @@ export interface AudioProbeInfo {
 export interface TempoAnalysisResult {
   bpm: number;
   confidence: number;
+  firstBeatMs: number;
+  downbeatOffsetMs: number;
 }
 
 export interface PreparedPlaybackAudio {

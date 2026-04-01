@@ -1,6 +1,5 @@
 import type { Track } from '@shared/types';
 import { useI18n } from '@renderer/features/i18n/I18nProvider';
-import { useTapTempo } from '@renderer/hooks/useTapTempo';
 import { alignMetronomeToDownbeat } from '@shared/services/alignmentService';
 
 interface AlignmentPanelProps {
@@ -19,7 +18,6 @@ export function AlignmentPanel({
   analyzingTempo = false
 }: AlignmentPanelProps) {
   const { t } = useI18n();
-  const { bpm, tap, reset } = useTapTempo();
   const aligned = alignMetronomeToDownbeat(track, {
     globalTargetBpm,
     harmonicMappingEnabled: true
@@ -33,27 +31,20 @@ export function AlignmentPanel({
   return (
     <div className="panel-content no-drag alignment-panel">
       <h4>{t('alignment.title')}</h4>
+      <div className="inspector-summary-card">
+        <strong>{track.name}</strong>
+        <span>
+          {Math.round(aligned.sourceBpm)} → {Math.round(aligned.effectiveSourceBpm)} →{' '}
+          {Math.round(aligned.targetBpm)} BPM
+        </span>
+        <span>自动映射: {aligned.harmonicMode}</span>
+      </div>
       <div className="properties-grid">
         <label className="field inline">
-          <span>{t('alignment.sourceBpm')}</span>
-          <input
-            type="number"
-            value={track.sourceBpm}
-            onChange={(event) => onUpdate({ sourceBpm: Number(event.target.value) })}
-          />
-        </label>
-        <label className="field inline">
-          <span>{t('alignment.targetBpm')}</span>
-          <input
-            type="number"
-            value={track.targetBpm ?? ''}
-            placeholder={String(aligned.targetBpm)}
-            onChange={(event) =>
-              onUpdate({
-                targetBpm: event.target.value ? Number(event.target.value) : undefined
-              })
-            }
-          />
+          <span>自动首拍后偏移</span>
+          <div className="alignment-readonly-value">
+            {Math.round(aligned.downbeatOffsetMsAfterSpeed)} ms
+          </div>
         </label>
         <label className="field inline">
           <span>{t('alignment.downbeatOffset')}</span>
@@ -79,30 +70,17 @@ export function AlignmentPanel({
       <div className="alignment-action-grid">
         <button onClick={() => nudge(-beatMs)}>{t('alignment.nudgeBeatLeft')}</button>
         <button onClick={() => nudge(beatMs)}>{t('alignment.nudgeBeatRight')}</button>
-        <button onClick={() => nudge(-beatMs / 2)}>{t('alignment.nudgeHalfLeft')}</button>
-        <button onClick={() => nudge(beatMs / 2)}>{t('alignment.nudgeHalfRight')}</button>
         <button onClick={() => nudge(-10)}>{t('alignment.nudge10msLeft')}</button>
         <button onClick={() => nudge(10)}>{t('alignment.nudge10msRight')}</button>
-        <button onClick={() => nudge(-50)}>{t('alignment.nudge50msLeft')}</button>
-        <button onClick={() => nudge(50)}>{t('alignment.nudge50msRight')}</button>
       </div>
       <div className="alignment-action-grid compact">
         <button onClick={() => void onAnalyzeTempo?.()} disabled={analyzingTempo}>
-          {analyzingTempo ? '分析中...' : '重新分析 BPM'}
-        </button>
-        <button onClick={tap}>{t('alignment.tapTempo')}</button>
-        <button
-          onClick={() => {
-            if (bpm) {
-              onUpdate({ sourceBpm: bpm });
-            }
-            reset();
-          }}
-        >
-          {t('common.apply')}
+          {analyzingTempo ? '分析中...' : '重新分析并自动对齐'}
         </button>
       </div>
-      {bpm && <p className="muted alignment-result">{bpm} BPM</p>}
+      <p className="muted alignment-result">
+        自动分析会优先更新 BPM 和首拍偏移；如果还有细小误差，再手动改上面两个偏移。
+      </p>
     </div>
   );
 }
