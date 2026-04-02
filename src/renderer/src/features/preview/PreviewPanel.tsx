@@ -149,6 +149,8 @@ export function PreviewPanel({
     mode === 'original' ? '原曲对比' : mode === 'processed' ? '变速试听' : '节拍器叠加';
   const currentTargetLabel = target === 'single' ? '单曲' : '串烧';
   const canControlPreview = target === 'single' ? Boolean(selectedTrack) : queueTracks.length > 0;
+  const canTogglePlayback = isPlaying || canControlPreview;
+  const playbackToggleLabel = isPlaying ? '暂停' : '播放';
   const previewDurationMs = Math.max(1, target === 'single' ? singleDurationMs : medleyDurationMs);
   const previewPositionMs = Math.max(
     0,
@@ -869,22 +871,12 @@ export function PreviewPanel({
                 <button
                   type="button"
                   className={`transport-button transport-core ${isPlaying ? 'active' : ''}`}
-                  aria-label="播放"
-                  title="播放"
-                  disabled={!canControlPreview || isPlaying}
-                  onClick={target === 'single' ? onPlaySingle : onPlayMedley}
+                  aria-label={playbackToggleLabel}
+                  title={playbackToggleLabel}
+                  disabled={!canTogglePlayback}
+                  onClick={isPlaying ? onPause : target === 'single' ? onPlaySingle : onPlayMedley}
                 >
-                  <Play size={20} strokeWidth={2.35} />
-                </button>
-                <button
-                  type="button"
-                  className="transport-button transport-utility"
-                  aria-label="暂停"
-                  title="暂停"
-                  disabled={!isPlaying}
-                  onClick={onPause}
-                >
-                  <Pause size={16} strokeWidth={2.35} />
+                  {isPlaying ? <Pause size={18} strokeWidth={2.35} /> : <Play size={20} strokeWidth={2.35} />}
                 </button>
                 <button
                   type="button"
