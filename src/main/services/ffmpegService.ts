@@ -77,6 +77,19 @@ function sanitizeFileName(value: string): string {
   return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim() || 'track';
 }
 
+function buildTrackProxyPrefix(trackId: string): string {
+  const stableId = createHash('sha1').update(trackId).digest('hex').slice(0, 16);
+  return `${stableId}__`;
+}
+
+function createPreparedFilePayload(filePath: string): PreparedPlaybackAudio {
+  return {
+    mimeType: 'audio/mpeg',
+    fileName: path.basename(filePath),
+    filePath
+  };
+}
+
 function getPreviewCacheDir(kind: 'single' | 'medley'): string {
   const dir = path.join(app.getPath('userData'), 'preview-cache', kind);
   ensureDir(dir);
@@ -92,15 +105,6 @@ function buildFileStatSignature(filePath?: string): Record<string, number | stri
     path: path.resolve(filePath),
     size: stat.size,
     mtimeMs: stat.mtimeMs
-  };
-}
-
-function createPreparedAudioPayload(filePath: string): PreparedPlaybackAudio {
-  const buffer = fs.readFileSync(filePath);
-  return {
-    mimeType: 'audio/mpeg',
-    fileName: path.basename(filePath),
-    base64Data: buffer.toString('base64')
   };
 }
 
@@ -131,9 +135,10 @@ function getProjectProxyDir(projectFilePath?: string): string | null {
 function buildProjectProxyPath(projectFilePath: string, plan: SingleTrackExportPlan): string {
   const signature = buildTrackProxySignature(plan);
   const baseName = sanitizeFileName(plan.track.trackName);
+  const trackPrefix = buildTrackProxyPrefix(plan.track.trackId);
   return path.join(
     getProjectProxyDir(projectFilePath) ?? path.dirname(projectFilePath),
-    `${plan.track.trackId}__${baseName}__${signature.slice(0, 12)}.mp3`
+    `${trackPrefix}${baseName}__${signature.slice(0, 12)}.mp3`
   );
 }
 
@@ -142,9 +147,13 @@ function cleanupStaleTrackProxies(projectFilePath: string, trackId: string, keep
   if (!proxyDir || !fs.existsSync(proxyDir)) {
     return;
   }
-  const prefix = `${trackId}__`;
+  const prefix = buildTrackProxyPrefix(trackId);
+  const legacyPrefix = `${trackId}__`;
   for (const entry of fs.readdirSync(proxyDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.startsWith(prefix)) {
+    if (
+      !entry.isFile() ||
+      (!entry.name.startsWith(prefix) && !entry.name.startsWith(legacyPrefix))
+    ) {
       continue;
     }
     const candidate = path.join(proxyDir, entry.name);
@@ -167,9 +176,11 @@ function hasAnyTrackProxy(projectFilePath: string, trackId: string): boolean {
   if (!proxyDir || !fs.existsSync(proxyDir)) {
     return false;
   }
-  const prefix = `${trackId}__`;
+  const prefix = buildTrackProxyPrefix(trackId);
+  const legacyPrefix = `${trackId}__`;
   return fs.readdirSync(proxyDir, { withFileTypes: true }).some(
-    (entry) => entry.isFile() && entry.name.startsWith(prefix)
+    (entry) =>
+      entry.isFile() && (entry.name.startsWith(prefix) || entry.name.startsWith(legacyPrefix))
   );
 }
 
@@ -693,7 +704,8 @@ export async function exportSingleTrack(
 ): Promise<string> {
   const outputDir = plan.outputDir || app.getPath('documents');
   ensureDir(outputDir);
-  const outputPath = path.join(outputDir, `${plan.track.outputBaseName}.${plan.format}`);
+  const safeOutputBaseName = sanitizeFileName(plan.track.outputBaseName);
+  const outputPath = path.join(outputDir, `${safeOutputBaseName}.${plan.format}`);
   await renderSingleToFile(
     ffmpegPath,
     plan,
@@ -723,7 +735,7 @@ export async function renderSinglePreviewPayload(
       PREVIEW_BITRATE_KBPS
     );
   }
-  return createPreparedAudioPayload(outputPath);
+  return createPreparedFilePayload(outputPath);
 }
 
 export async function renderMedleyPreviewPayload(
@@ -745,7 +757,7 @@ export async function renderMedleyPreviewPayload(
       PREVIEW_BITRATE_KBPS
     );
   }
-  return createPreparedAudioPayload(outputPath);
+  return createPreparedFilePayload(outputPath);
 }
 
 export async function generateTrackProxies(

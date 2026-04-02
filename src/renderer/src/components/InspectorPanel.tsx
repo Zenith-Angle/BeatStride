@@ -113,10 +113,10 @@ export function InspectorPanel({
       </div>
       <div ref={splitRootRef} className="inspector-split no-drag">
         <div
-          className="panel-content inspector-top"
-          style={{ height: topHeight, borderBottom: '1px solid var(--line)' }}
+          className="panel-content inspector-top inspector-top-pane"
+          style={{ height: topHeight }}
         >
-          <h4 style={{ margin: 0, marginBottom: 10 }}>全局节奏基准</h4>
+          <h4 className="inspector-section-title">全局节奏基准</h4>
           <div className="properties-grid">
             <label className="field inline">
               <span>全局目标 BPM</span>
@@ -164,7 +164,7 @@ export function InspectorPanel({
             ) : (
               <p className="muted inspector-summary-card">选中工作区歌曲后，这里会显示实际映射结果。</p>
             )}
-            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+            <p className="muted inspector-note">
               自动分析会优先估计 BPM 和首拍位置；下半区域只保留少量保底微调。
             </p>
           </div>
@@ -174,7 +174,7 @@ export function InspectorPanel({
           onMouseDown={() => setResizing(true)}
         />
         <div className="panel-content inspector-bottom">
-          <h4 style={{ margin: 0, marginBottom: 10 }}>微调面板</h4>
+          <h4 className="inspector-section-title">微调面板</h4>
           <div className="inspector-section-grid">
             <section className="inspector-form-section">
               <strong>自动对齐与节拍器</strong>
@@ -329,7 +329,7 @@ export function InspectorPanel({
               analyzingTempo={analyzingTempo}
             />
           ) : (
-            <p className="muted" style={{ marginTop: 16 }}>{t('status.noTrackSelected')}</p>
+            <p className="muted inspector-empty-tip">{t('status.noTrackSelected')}</p>
           )}
         </div>
       </div>

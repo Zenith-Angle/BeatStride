@@ -324,6 +324,30 @@ select {
   background: color-mix(in srgb, var(--primary) 12%, var(--bg-elevated));
 }
 
+.track-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.track-item-check-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.track-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-item-meta,
+.track-item-status {
+  font-size: 12px;
+}
+
 .library-title {
   display: inline-block;
   white-space: nowrap;
@@ -2437,6 +2461,23 @@ select {
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface-paper) 34%, transparent), transparent);
 }
 
+.inspector-top-pane {
+  border-bottom: 1px solid var(--line);
+}
+
+.inspector-section-title {
+  margin: 0 0 10px;
+}
+
+.inspector-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.inspector-empty-tip {
+  margin-top: 16px;
+}
+
 .inspector-summary-card {
   display: grid;
   gap: 4px;
@@ -2717,6 +2758,15 @@ select {
   min-width: 72px;
 }
 
+.settings-developer-hint {
+  align-self: center;
+}
+
+.settings-developer-toggle {
+  width: auto;
+  justify-self: end;
+}
+
 .floating-panel {
   position: absolute;
   top: 76px;
@@ -2734,6 +2784,16 @@ select {
   overflow: auto;
 }
 
+.export-tuning-hint {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.export-warning {
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .export-run-button {
   width: 100%;
   margin-top: 6px;
@@ -2743,6 +2803,18 @@ select {
   display: grid;
   gap: 10px;
   margin-top: 16px;
+}
+
+.export-progress {
+  width: 100%;
+}
+
+.export-open-output {
+  margin-top: 8px;
+}
+
+.export-error {
+  color: var(--danger);
 }
 
 .status-chip,

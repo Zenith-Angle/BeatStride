@@ -28,6 +28,8 @@ import { useI18n } from '@renderer/features/i18n/I18nProvider';
 
 type PageMode = 'welcome' | 'editor';
 const TRACK_PROXY_BITRATE_KBPS = 160;
+const MIN_IMPORT_CONCURRENCY = 2;
+const MAX_IMPORT_CONCURRENCY = 8;
 
 interface ProxyGenerationState {
   total: number;
@@ -35,6 +37,34 @@ interface ProxyGenerationState {
   failed: number;
   currentTrackName: string;
   cancelRequested: boolean;
+}
+
+async function mapWithConcurrency<TInput, TResult>(
+  items: TInput[],
+  concurrency: number,
+  worker: (item: TInput, index: number) => Promise<TResult>
+): Promise<TResult[]> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const results = new Array<TResult>(items.length);
+  const limit = Math.max(1, Math.min(items.length, concurrency));
+  let cursor = 0;
+
+  const runWorker = async () => {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) {
+        return;
+      }
+      results[index] = await worker(items[index], index);
+    }
+  };
+
+  await Promise.all(Array.from({ length: limit }, () => runWorker()));
+  return results;
 }
 
 function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
@@ -81,8 +111,19 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
 
     setImporting(true);
     try {
-      const probed = await Promise.all(
-        paths.map(async (filePath) => {
+      const hardwareConcurrency =
+        typeof navigator !== 'undefined' && Number.isFinite(navigator.hardwareConcurrency)
+          ? navigator.hardwareConcurrency
+          : MAX_IMPORT_CONCURRENCY;
+      const importConcurrency = Math.max(
+        MIN_IMPORT_CONCURRENCY,
+        Math.min(MAX_IMPORT_CONCURRENCY, Math.ceil(hardwareConcurrency / 2))
+      );
+
+      const probed = await mapWithConcurrency(
+        paths,
+        importConcurrency,
+        async (filePath) => {
           const [probe, tempo] = await Promise.all([
             window.beatStride.probeAudio(filePath),
             window.beatStride.detectTempo(filePath, analysisSeconds, beatsPerBar).catch(() => ({
@@ -99,7 +140,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
             detectedBpm: tempo.bpm > 0 ? tempo.bpm : undefined,
             downbeatOffsetMs: tempo.downbeatOffsetMs > 0 ? tempo.downbeatOffsetMs : 0
           };
-        })
+        }
       );
       projectStore.addTracksFromFiles(probed);
     } finally {

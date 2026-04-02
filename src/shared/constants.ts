@@ -10,6 +10,7 @@ export const APP_NAME = 'BeatStride';
 export const PROJECT_FILE_EXT = '.runbeat-project.json';
 export const PROJECT_VERSION = 1;
 export const PROJECT_PROXY_DIRNAME = 'beatstride-proxies';
+export const MEDIA_PROTOCOL_SCHEME = 'beatstride-media';
 export const LEGACY_DEFAULT_METRONOME_SAMPLE_PATH =
   'C:\\CodeProgram\\StrideBeat\\resources\\metronome\\180BPM.mp3';
 export const DEFAULT_METRONOME_SAMPLE_PATH =

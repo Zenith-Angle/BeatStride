@@ -61,31 +61,22 @@ export function TrackLibraryPanel({
                         className={`track-item ${selected ? 'selected' : ''} ${active ? 'active' : ''}`}
                         onClick={() => onSelectTrack(track.id)}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                          <label
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              minWidth: 0
-                            }}
-                          >
+                        <div className="track-item-head">
+                          <label className="track-item-check-label">
                             <input
                               type="checkbox"
                               checked={selected}
                               onChange={() => onToggleTrack(track.id)}
                               onClick={(event) => event.stopPropagation()}
                             />
-                            <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {track.name}
-                            </strong>
+                            <strong className="track-item-title">{track.name}</strong>
                           </label>
                           <span className="muted">{Math.round(track.sourceBpm)} BPM</span>
                         </div>
-                        <div className="muted" style={{ fontSize: 12 }}>
+                        <div className="muted track-item-meta">
                           {t('library.duration')}: {formatMs(track.durationMs, language)}
                         </div>
-                        <div className="muted" style={{ fontSize: 12 }}>
+                        <div className="muted track-item-status">
                           状态: {track.exportEnabled ? '已加入列表' : '未加入列表'}
                         </div>
                       </div>

@@ -1,15 +1,31 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, protocol } from 'electron';
+import { MEDIA_PROTOCOL_SCHEME } from '@shared/constants';
 import { registerIpcHandlers } from './ipc';
 import { createMainWindow } from './window';
 import { detectFfmpegBinaries } from './services/ffmpegBinaryService';
+import { registerMediaProtocol } from './services/mediaProtocolService';
 import { SettingsService } from './services/settingsService';
 import { setupAppMenu } from './menu';
 
 const settingsService = new SettingsService();
 
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: MEDIA_PROTOCOL_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true
+    }
+  }
+]);
+
 function bootstrap(): void {
+  registerMediaProtocol();
   registerIpcHandlers();
   const saved = settingsService.load();
   const detected = detectFfmpegBinaries({

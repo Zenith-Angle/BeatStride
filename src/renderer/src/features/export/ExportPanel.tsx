@@ -89,7 +89,7 @@ export function ExportPanel({
             <button onClick={pickOutputDir}>...</button>
           </div>
         </label>
-        <div className="muted" style={{ fontSize: 12, lineHeight: 1.6 }}>
+        <div className="muted export-tuning-hint">
           当前微调:
           {' '}
           {project.mixTuning.stretchEngine}
@@ -99,7 +99,7 @@ export function ExportPanel({
           {project.mixTuning.loudnormEnabled ? `loudnorm ${project.mixTuning.targetLufs} LUFS` : 'loudnorm 关闭'}
         </div>
         {singleBlocked && (
-          <div style={{ color: 'var(--danger)', fontSize: 12 }}>
+          <div className="export-warning">
             单曲导出需要先在工作区选中一首歌曲。
           </div>
         )}
@@ -111,13 +111,16 @@ export function ExportPanel({
             <div className="muted">
               {activeJob.status === 'running' ? t('export.running') : activeJob.status}
             </div>
-            <progress value={activeJob.progress} max={1} style={{ width: '100%' }} />
+            <progress className="export-progress" value={activeJob.progress} max={1} />
             {activeJob.outputPath && (
-              <button style={{ marginTop: 8 }} onClick={() => window.beatStride.openPath(activeJob.outputPath!)}>
+              <button
+                className="export-open-output"
+                onClick={() => window.beatStride.openPath(activeJob.outputPath!)}
+              >
                 {t('export.completed')}
               </button>
             )}
-            {activeJob.error && <div style={{ color: 'var(--danger)' }}>{activeJob.error}</div>}
+            {activeJob.error && <div className="export-error">{activeJob.error}</div>}
           </div>
         )}
       </div>

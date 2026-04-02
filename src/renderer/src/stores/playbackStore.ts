@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { ProjectFile, Track } from '@shared/types';
+import type { PreparedPlaybackAudio, ProjectFile, Track } from '@shared/types';
+import { MEDIA_PROTOCOL_SCHEME } from '@shared/constants';
 import {
   buildProjectPreviewExportPlan,
   buildSingleTrackPreviewExportPlan,
@@ -83,13 +84,10 @@ function pushDebug(
 }
 
 function toPlayableSrc(filePath: string): string {
-  if (/^(https?:|file:|blob:)/i.test(filePath)) {
+  if (new RegExp(`^(https?:|file:|blob:|${MEDIA_PROTOCOL_SCHEME}:)`, 'i').test(filePath)) {
     return filePath;
   }
-
-  const normalized = filePath.replace(/\\/g, '/');
-  const prefixed = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`;
-  return encodeURI(prefixed);
+  return `${MEDIA_PROTOCOL_SCHEME}://local/?path=${encodeURIComponent(filePath)}`;
 }
 
 function clearPreviewNodes(): void {
@@ -140,6 +138,16 @@ function decodeBase64ToArrayBuffer(base64Data: string): ArrayBuffer {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes.buffer;
+}
+
+function resolvePreparedAudioSource(payload: PreparedPlaybackAudio): string {
+  if (payload.filePath) {
+    return payload.filePath;
+  }
+  if (payload.base64Data) {
+    return createBlobUrlFromBase64(payload.base64Data, payload.mimeType);
+  }
+  throw new Error('预览音频数据为空，无法播放。');
 }
 
 function cancelPendingRequests(): void {
@@ -288,7 +296,18 @@ async function loadMetronomeBuffer(samplePath?: string): Promise<AudioBuffer | n
     try {
       const audioContext = await ensureAudioContext();
       const payload = await window.beatStride.preparePlaybackAudio(samplePath);
-      const decoded = decodeBase64ToArrayBuffer(payload.base64Data);
+      let decoded: ArrayBuffer;
+      if (payload.base64Data) {
+        decoded = decodeBase64ToArrayBuffer(payload.base64Data);
+      } else if (payload.filePath) {
+        const response = await fetch(toPlayableSrc(payload.filePath));
+        if (!response.ok) {
+          throw new Error(`无法读取节拍器样本: ${response.status}`);
+        }
+        decoded = await response.arrayBuffer();
+      } else {
+        throw new Error('节拍器样本数据为空。');
+      }
       const buffer = await audioContext.decodeAudioData(decoded.slice(0));
       logPreviewDebug('metronome-buffer', {
         samplePath,
@@ -740,10 +759,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
       stopActivePlayback();
       const token = playbackToken;
-      const playbackSourcePath = createBlobUrlFromBase64(
-        playbackPayload.base64Data,
-        playbackPayload.mimeType
-      );
+      const playbackSourcePath = resolvePreparedAudioSource(playbackPayload);
       const previewDurationMs =
         mode === 'original' ? trackPlan.trimmedSourceDurationMs : trackPlan.processedDurationMs;
       pushDebug(set, `预览音频已就绪 | ${playbackPayload.fileName}`);
@@ -858,10 +874,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
       stopActivePlayback();
       const token = playbackToken;
-      const playbackSourcePath = createBlobUrlFromBase64(
-        playbackPayload.base64Data,
-        playbackPayload.mimeType
-      );
+      const playbackSourcePath = resolvePreparedAudioSource(playbackPayload);
       pushDebug(set, `串烧预览音频已就绪 | ${playbackPayload.fileName}`);
       const medleyBeatTimes =
         mode === 'metronome'

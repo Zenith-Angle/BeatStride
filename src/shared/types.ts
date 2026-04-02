@@ -224,7 +224,8 @@ export interface TempoAnalysisResult {
 export interface PreparedPlaybackAudio {
   mimeType: string;
   fileName: string;
-  base64Data: string;
+  base64Data?: string;
+  filePath?: string;
 }
 
 export interface GeneratedTrackProxy {
