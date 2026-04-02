@@ -102,6 +102,7 @@ export function PreviewPanel({
   const previewSeekRef = useRef<HTMLInputElement | null>(null);
   const scrubbingRef = useRef(false);
   const scrubValueRef = useRef(0);
+  const suppressDirectSeekUntilRef = useRef(0);
   const dragPointerRef = useRef<{ x: number; y: number } | null>(null);
   const queueTrackIdsRef = useRef<string[]>([]);
   const draggingTrackIdRef = useRef<string | null>(null);
@@ -123,6 +124,7 @@ export function PreviewPanel({
   const [dropTarget, setDropTarget] = useState<{ trackId: string; placement: 'before' | 'after' } | null>(null);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [scrubValue, setScrubValue] = useState(0);
+  type SeekCommitSource = 'window-release' | 'range-release' | 'change-direct';
   const getProxyStatusLabel = (proxyStatus: TrackProxyStatus) =>
     proxyStatus === 'ready'
       ? '代理已生成'
@@ -354,8 +356,21 @@ export function PreviewPanel({
     setScrubValue(nextValue);
   }, [currentTimeMs, previewDurationMs, isScrubbing]);
 
-  const commitPreviewSeek = useEffectEvent((value: number) => {
+  const commitPreviewSeek = useEffectEvent((value: number, source: SeekCommitSource) => {
     const nextPositionMs = Math.max(0, Math.min(previewDurationMs, value));
+    if (source === 'change-direct') {
+      suppressDirectSeekUntilRef.current = 0;
+    } else {
+      suppressDirectSeekUntilRef.current = performance.now() + 200;
+    }
+    console.info('[BeatStride][seek-ui]', {
+      source,
+      rawValue: value,
+      committedValue: nextPositionMs,
+      durationMs: previewDurationMs,
+      isScrubbing: scrubbingRef.current,
+      playbackPositionMs: currentTimeMs
+    });
     scrubbingRef.current = false;
     scrubValueRef.current = nextPositionMs;
     setScrubValue(nextPositionMs);
@@ -369,8 +384,11 @@ export function PreviewPanel({
     }
 
     const commitOnRelease = () => {
+      if (!scrubbingRef.current) {
+        return;
+      }
       const nextValue = Number(previewSeekRef.current?.value ?? scrubValueRef.current);
-      commitPreviewSeek(nextValue);
+      commitPreviewSeek(nextValue, 'window-release');
     };
 
     window.addEventListener('pointerup', commitOnRelease);
@@ -512,6 +530,17 @@ export function PreviewPanel({
     const handlePointerMove = (event: PointerEvent) => {
       const state = pointerDragStateRef.current;
       if (!state || state.pointerId !== event.pointerId) {
+        return;
+      }
+
+      const primaryButtonPressed = (event.buttons & 1) === 1;
+      if (!primaryButtonPressed) {
+        if (state.started) {
+          clearDragRuntime();
+        } else {
+          pointerDragStateRef.current = null;
+          dragPointerRef.current = null;
+        }
         return;
       }
 
@@ -686,11 +715,42 @@ export function PreviewPanel({
       started: false
     };
     dragPointerRef.current = { x: event.clientX, y: event.clientY };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignore pointer-capture failures in unsupported environments.
+    }
   };
 
-  const startPreviewSeek = () => {
+  const startPreviewSeek = (event: ReactPointerEvent<HTMLInputElement>) => {
+    clearDragRuntime();
+    console.info('[BeatStride][seek-ui]', {
+      source: 'pointer-down',
+      value: Number(event.currentTarget.value),
+      durationMs: previewDurationMs,
+      playbackPositionMs: currentTimeMs
+    });
     scrubbingRef.current = true;
     setIsScrubbing(true);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Ignore pointer-capture failures on range inputs.
+    }
+  };
+
+  const finishPreviewSeek = (event: ReactPointerEvent<HTMLInputElement>) => {
+    if (!scrubbingRef.current) {
+      return;
+    }
+    commitPreviewSeek(Number(event.currentTarget.value), 'range-release');
+    try {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // Ignore pointer-capture release failures.
+    }
   };
 
   const handlePreviewSeekChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -698,7 +758,15 @@ export function PreviewPanel({
     scrubValueRef.current = nextValue;
     setScrubValue(nextValue);
     if (!scrubbingRef.current) {
-      commitPreviewSeek(nextValue);
+      if (performance.now() < suppressDirectSeekUntilRef.current) {
+        console.info('[BeatStride][seek-ui]', {
+          source: 'change-direct-suppressed',
+          rawValue: nextValue,
+          suppressUntil: suppressDirectSeekUntilRef.current
+        });
+        return;
+      }
+      commitPreviewSeek(nextValue, 'change-direct');
     }
   };
 
@@ -929,6 +997,8 @@ export function PreviewPanel({
                     aria-label="试听进度"
                     style={{ '--progress-percent': previewProgressPercent } as CSSProperties}
                     onPointerDown={startPreviewSeek}
+                    onPointerUp={finishPreviewSeek}
+                    onPointerCancel={finishPreviewSeek}
                     onChange={handlePreviewSeekChange}
                   />
                 </div>

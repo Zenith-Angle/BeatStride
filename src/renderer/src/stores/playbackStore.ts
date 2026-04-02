@@ -50,6 +50,7 @@ interface PlaybackState {
   setVolume: (volume: number) => void;
   setPreviewPosition: (timeMs: number, label?: string, trackId?: string | null) => void;
   seekToPreviewPosition: (timeMs: number) => boolean;
+  resolveMedleySeekFallbackMs: (requestedTimeMs: number) => number;
   pause: () => void;
   playTrack: (track: Track, project: ProjectFile, options?: PlaybackStartOptions) => Promise<void>;
   playMedley: (project: ProjectFile, options?: PlaybackStartOptions) => Promise<void>;
@@ -68,6 +69,10 @@ let masterGainNode: GainNode | null = null;
 let previewVolume = 1;
 const metronomeBufferCache = new Map<string, Promise<AudioBuffer | null>>();
 let activePlaybackSegments: PlaybackSegment[] = [];
+let pendingSeekCleanup: (() => void) | null = null;
+let pendingSeekToken = 0;
+let medleySeekFallbackEnabled = false;
+let medleySeekFallbackMs = 0;
 
 function logPreviewDebug(scope: string, payload: Record<string, unknown>): void {
   console.info(`[BeatStride][${scope}]`, payload);
@@ -131,6 +136,18 @@ function createBlobUrlFromBase64(base64Data: string, mimeType: string): string {
   return url;
 }
 
+async function createBlobUrlFromFilePath(filePath: string, mimeType: string): Promise<string> {
+  const response = await fetch(toPlayableSrc(filePath));
+  if (!response.ok) {
+    throw new Error(`无法读取预览音频: ${response.status}`);
+  }
+  const bytes = await response.arrayBuffer();
+  const contentType = response.headers.get('content-type') || mimeType;
+  const url = URL.createObjectURL(new Blob([bytes], { type: contentType }));
+  activeBlobUrls.push(url);
+  return url;
+}
+
 function decodeBase64ToArrayBuffer(base64Data: string): ArrayBuffer {
   const binary = atob(base64Data);
   const bytes = new Uint8Array(binary.length);
@@ -140,9 +157,9 @@ function decodeBase64ToArrayBuffer(base64Data: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-function resolvePreparedAudioSource(payload: PreparedPlaybackAudio): string {
+async function resolvePreparedAudioSource(payload: PreparedPlaybackAudio): Promise<string> {
   if (payload.filePath) {
-    return payload.filePath;
+    return createBlobUrlFromFilePath(payload.filePath, payload.mimeType);
   }
   if (payload.base64Data) {
     return createBlobUrlFromBase64(payload.base64Data, payload.mimeType);
@@ -154,11 +171,22 @@ function cancelPendingRequests(): void {
   playbackRequestToken += 1;
 }
 
+function clearPendingSeek(): void {
+  if (!pendingSeekCleanup) {
+    return;
+  }
+  pendingSeekCleanup();
+  pendingSeekCleanup = null;
+}
+
 function stopActivePlayback(): void {
   playbackToken += 1;
+  clearPendingSeek();
   stopAllAudioElements();
   audio = null;
   activePlaybackSegments = [];
+  medleySeekFallbackEnabled = false;
+  medleySeekFallbackMs = 0;
   clearPreviewNodes();
   clearBlobUrls();
   if (frame !== null) {
@@ -209,37 +237,188 @@ function seekActivePlayback(
   set: (partial: Partial<PlaybackState> | ((state: PlaybackState) => Partial<PlaybackState>)) => void
 ): boolean {
   const currentAudio = audio;
+  const hasMetadata =
+    currentAudio?.readyState !== undefined
+      ? currentAudio.readyState >= HTMLMediaElement.HAVE_METADATA
+      : false;
+  logPreviewDebug('seek-active', {
+    status: 'request',
+    previewTimeMs,
+    hasAudio: Boolean(currentAudio),
+    activeSegmentCount: activePlaybackSegments.length,
+    hasMetadata,
+    audioPaused: currentAudio ? currentAudio.paused : null,
+    audioSeeking: currentAudio ? currentAudio.seeking : null,
+    audioReadyState: currentAudio ? currentAudio.readyState : null,
+    audioCurrentTimeSec: currentAudio ? Number(currentAudio.currentTime.toFixed(4)) : null
+  });
   if (!currentAudio || activePlaybackSegments.length === 0) {
+    logPreviewDebug('seek-active', {
+      status: 'failed-no-active-playback',
+      previewTimeMs,
+      hasAudio: Boolean(currentAudio),
+      activeSegmentCount: activePlaybackSegments.length
+    });
+    return false;
+  }
+  if (!hasMetadata) {
+    logPreviewDebug('seek-active', {
+      status: 'failed-metadata-not-ready',
+      previewTimeMs,
+      audioReadyState: currentAudio.readyState
+    });
     return false;
   }
 
   const resolved = resolveSegmentAtPreviewTime(activePlaybackSegments, previewTimeMs);
-  if (!resolved || resolved.segment.kind !== 'track') {
+  if (!resolved) {
+    logPreviewDebug('seek-active', {
+      status: 'failed-resolve-segment',
+      previewTimeMs,
+      activeSegmentCount: activePlaybackSegments.length
+    });
+    return false;
+  }
+  if (resolved.segment.kind !== 'track') {
+    logPreviewDebug('seek-active', {
+      status: 'failed-non-track-segment',
+      previewTimeMs,
+      kind: resolved.segment.kind,
+      label: resolved.segment.label
+    });
     return false;
   }
 
   const nextOffsetMs = Math.max(0, Math.min(resolved.segment.previewDurationMs, resolved.offsetMs));
+  const committedPreviewTimeMs = resolved.baseMs + nextOffsetMs;
   const nextCurrentTime =
     (resolved.segment.sourceStartSec ?? 0) +
     (nextOffsetMs * (resolved.segment.playbackRate ?? 1)) / 1000;
+  const nextLabel = resolved.segment.resolveLabel?.(nextOffsetMs) ?? resolved.segment.label;
+  const nextTrackId = resolved.segment.resolveTrackId?.(nextOffsetMs) ?? resolved.segment.trackId;
+  logPreviewDebug('seek-active', {
+    status: 'apply',
+    previewTimeMs,
+    baseMs: resolved.baseMs,
+    offsetMs: resolved.offsetMs,
+    nextOffsetMs,
+    nextCurrentTimeSec: Number(nextCurrentTime.toFixed(4)),
+    playbackRate: resolved.segment.playbackRate ?? 1,
+    sourceStartSec: resolved.segment.sourceStartSec ?? 0,
+    segmentDurationMs: resolved.segment.previewDurationMs,
+    label: resolved.segment.label,
+    trackId: resolved.segment.trackId
+  });
 
   try {
+    clearPendingSeek();
     clearPreviewNodes();
     currentAudio.playbackRate = resolved.segment.playbackRate ?? 1;
+    const seekToken = ++pendingSeekToken;
+    const finalizePendingSeek = (source: 'seeked' | 'timeupdate') => {
+      if (seekToken !== pendingSeekToken || audio !== currentAudio) {
+        return;
+      }
+      const committedAudioTimeSec = Number(currentAudio.currentTime.toFixed(4));
+      const seekDeltaSec = Math.abs(currentAudio.currentTime - nextCurrentTime);
+      if (seekDeltaSec > 0.25) {
+        return;
+      }
+      clearPendingSeek();
+      scheduleMetronome(resolved.segment, nextOffsetMs);
+      logPreviewDebug('seek-active', {
+        status: 'success-deferred',
+        source,
+        previewTimeMs,
+        committedPreviewTimeMs,
+        committedAudioTimeSec,
+        seekDeltaSec: Number(seekDeltaSec.toFixed(4)),
+        audioPaused: currentAudio.paused,
+        audioSeeking: currentAudio.seeking,
+        label: nextLabel,
+        trackId: nextTrackId
+      });
+    };
+    const handleSeeked = () => finalizePendingSeek('seeked');
+    const handleTimeUpdate = () => finalizePendingSeek('timeupdate');
+    const timeoutId = window.setTimeout(() => {
+      if (seekToken !== pendingSeekToken) {
+        return;
+      }
+      clearPendingSeek();
+      logPreviewDebug('seek-active', {
+        status: 'failed-deferred-timeout',
+        previewTimeMs,
+        committedPreviewTimeMs,
+        nextCurrentTimeSec: Number(nextCurrentTime.toFixed(4)),
+        committedAudioTimeSec: Number(currentAudio.currentTime.toFixed(4)),
+        audioPaused: currentAudio.paused,
+        audioSeeking: currentAudio.seeking
+      });
+    }, 1500);
+    pendingSeekCleanup = () => {
+      window.clearTimeout(timeoutId);
+      currentAudio.removeEventListener('seeked', handleSeeked);
+      currentAudio.removeEventListener('timeupdate', handleTimeUpdate);
+    };
+    currentAudio.addEventListener('seeked', handleSeeked);
+    currentAudio.addEventListener('timeupdate', handleTimeUpdate);
     currentAudio.currentTime = nextCurrentTime;
-    scheduleMetronome(resolved.segment, nextOffsetMs);
+    const committedAudioTimeSec = Number(currentAudio.currentTime.toFixed(4));
+    const seekDeltaSec = Math.abs(currentAudio.currentTime - nextCurrentTime);
+    const seekAccepted = seekDeltaSec <= 0.25;
     set({
       isPlaying: !currentAudio.paused,
-      currentTimeMs: resolved.baseMs + nextOffsetMs,
-      currentLabel: resolved.segment.resolveLabel?.(nextOffsetMs) ?? resolved.segment.label,
-      playingTrackId: resolved.segment.resolveTrackId?.(nextOffsetMs) ?? resolved.segment.trackId
+      currentTimeMs: committedPreviewTimeMs,
+      currentLabel: nextLabel,
+      playingTrackId: nextTrackId
     });
+    if (!seekAccepted) {
+      pushDebug(
+        set,
+        `请求定位到 ${committedPreviewTimeMs.toFixed(0)}ms / audio=${nextCurrentTime.toFixed(2)}s`
+      );
+      logPreviewDebug('seek-active', {
+        status: 'pending-commit',
+        previewTimeMs,
+        committedPreviewTimeMs,
+        nextCurrentTimeSec: Number(nextCurrentTime.toFixed(4)),
+        committedAudioTimeSec,
+        seekDeltaSec: Number(seekDeltaSec.toFixed(4)),
+        audioPaused: currentAudio.paused,
+        audioSeeking: currentAudio.seeking,
+        label: nextLabel,
+        trackId: nextTrackId
+      });
+      return true;
+    }
+    clearPendingSeek();
+    scheduleMetronome(resolved.segment, nextOffsetMs);
     pushDebug(
       set,
-      `原地定位到 ${(resolved.baseMs + nextOffsetMs).toFixed(0)}ms / audio=${nextCurrentTime.toFixed(2)}s`
+      `原地定位到 ${committedPreviewTimeMs.toFixed(0)}ms / audio=${nextCurrentTime.toFixed(2)}s`
     );
+    logPreviewDebug('seek-active', {
+      status: 'success',
+      previewTimeMs,
+      committedPreviewTimeMs,
+      committedAudioTimeSec,
+      seekDeltaSec: Number(seekDeltaSec.toFixed(4)),
+      audioPaused: currentAudio.paused,
+      audioSeeking: currentAudio.seeking,
+      label: nextLabel,
+      trackId: nextTrackId
+    });
     return true;
-  } catch {
+  } catch (error) {
+    clearPendingSeek();
+    logPreviewDebug('seek-active', {
+      status: 'failed-exception',
+      previewTimeMs,
+      nextCurrentTimeSec: Number(nextCurrentTime.toFixed(4)),
+      playbackRate: resolved.segment.playbackRate ?? 1,
+      error: error instanceof Error ? error.message : String(error)
+    });
     return false;
   }
 }
@@ -502,6 +681,11 @@ async function runTrackSegment(
       if (token !== playbackToken) {
         return;
       }
+      // Avoid forcing currentTime=0 on late metadata events, which may overwrite user seeks.
+      if (pendingSeek <= 0.001) {
+        pendingSeek = 0;
+        return;
+      }
       try {
         currentAudio.currentTime = pendingSeek;
         pushDebug(set, `已定位到 ${pendingSeek.toFixed(2)}s`);
@@ -511,11 +695,7 @@ async function runTrackSegment(
       }
     };
 
-    const tick = () => {
-      if (token !== playbackToken) {
-        resolve();
-        return;
-      }
+    const resolvePlaybackSnapshot = () => {
       const sourceProgressSec = Math.max(
         0,
         currentAudio.currentTime - (segment.sourceStartSec ?? 0)
@@ -526,12 +706,26 @@ async function runTrackSegment(
       );
       const currentLabel = segment.resolveLabel?.(previewProgressMs) ?? segment.label;
       const playingTrackId = segment.resolveTrackId?.(previewProgressMs) ?? segment.trackId;
+      return { previewProgressMs, currentLabel, playingTrackId };
+    };
+
+    const syncPlaybackSnapshot = (forceIsPlaying?: boolean) => {
+      const snapshot = resolvePlaybackSnapshot();
       set({
-        isPlaying: true,
-        playingTrackId,
-        currentLabel,
-        currentTimeMs: baseMs + previewProgressMs
+        isPlaying: forceIsPlaying ?? !currentAudio.paused,
+        playingTrackId: snapshot.playingTrackId,
+        currentLabel: snapshot.currentLabel,
+        currentTimeMs: baseMs + snapshot.previewProgressMs
       });
+      return snapshot;
+    };
+
+    const tick = () => {
+      if (token !== playbackToken) {
+        resolve();
+        return;
+      }
+      syncPlaybackSnapshot();
 
       if (currentAudio.currentTime >= (segment.sourceEndSec ?? 0)) {
         pushDebug(set, `播放结束 ${segment.label}`);
@@ -554,12 +748,34 @@ async function runTrackSegment(
       pushDebug(set, `元数据已加载 ${segment.label}`);
     };
     currentAudio.onplay = () => {
-      scheduleMetronome(segment, startOffsetMs);
+      if (token !== playbackToken) {
+        return;
+      }
+      const snapshot = syncPlaybackSnapshot(true);
+      scheduleMetronome(segment, snapshot.previewProgressMs);
+      if (frame !== null) {
+        cancelAnimationFrame(frame);
+      }
       frame = requestAnimationFrame(tick);
       pushDebug(set, `开始播放 ${segment.label}`);
     };
+    currentAudio.onpause = () => {
+      if (token !== playbackToken) {
+        return;
+      }
+      syncPlaybackSnapshot(false);
+      clearPreviewNodes();
+    };
 
     currentAudio.onended = () => {
+      if (token === playbackToken) {
+        set({
+          isPlaying: false,
+          playingTrackId: segment.trackId,
+          currentLabel: segment.label,
+          currentTimeMs: baseMs + segment.previewDurationMs
+        });
+      }
       activeAudioElements.delete(currentAudio);
       if (audio === currentAudio) {
         audio = null;
@@ -701,6 +917,18 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     });
   },
   seekToPreviewPosition: (timeMs) => seekActivePlayback(Math.max(0, Math.round(timeMs)), set),
+  resolveMedleySeekFallbackMs: (requestedTimeMs) => {
+    const normalizedRequestedMs = Math.max(0, Math.round(requestedTimeMs));
+    if (!medleySeekFallbackEnabled) {
+      return normalizedRequestedMs;
+    }
+    const currentPositionMs = Math.max(0, Math.round(get().currentTimeMs));
+    const latestLoadedMs = Math.max(currentPositionMs, Math.round(medleySeekFallbackMs));
+    if (normalizedRequestedMs <= latestLoadedMs) {
+      return normalizedRequestedMs;
+    }
+    return latestLoadedMs;
+  },
   pause: () => {
     const { currentTimeMs, currentLabel, playingTrackId } = get();
     stopEverything();
@@ -759,7 +987,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
       stopActivePlayback();
       const token = playbackToken;
-      const playbackSourcePath = resolvePreparedAudioSource(playbackPayload);
+      const playbackSourcePath = await resolvePreparedAudioSource(playbackPayload);
       const previewDurationMs =
         mode === 'original' ? trackPlan.trimmedSourceDurationMs : trackPlan.processedDurationMs;
       pushDebug(set, `预览音频已就绪 | ${playbackPayload.fileName}`);
@@ -821,6 +1049,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       get().mode === 'metronome' ? 'metronome' : 'processed';
     const startPreviewMs = Math.max(0, options?.startPreviewMs ?? 0);
     const medleyPlan = buildProjectPreviewExportPlan(project);
+    medleySeekFallbackEnabled = false;
+    medleySeekFallbackMs = 0;
     logPreviewDebug('medley-preview-request', {
       mode,
       clipCount: medleyPlan.clips.length,
@@ -859,88 +1089,326 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       return;
     }
 
-    try {
-      const previewPayloadTask = window.beatStride.prepareMedleyPreviewAudio({
-        plan: medleyPlan,
+    if (project.exportPreset.crossfadeMs > 0) {
+      try {
+        const previewPayloadTask = window.beatStride.prepareMedleyPreviewAudio({
+          plan: medleyPlan,
+          mode: 'processed'
+        });
+        const metronomeBufferTask =
+          mode === 'metronome'
+            ? loadMetronomeBuffer(metronomeSamplePath)
+            : Promise.resolve(null);
+        const [playbackPayload] = await Promise.all([previewPayloadTask, metronomeBufferTask]);
+        if (requestToken !== playbackRequestToken) {
+          return;
+        }
+        stopActivePlayback();
+        const token = playbackToken;
+        const playbackSourcePath = await resolvePreparedAudioSource(playbackPayload);
+        pushDebug(set, `串烧预览音频已就绪 | ${playbackPayload.fileName}`);
+        const medleyBeatTimes =
+          mode === 'metronome'
+            ? medleyPlan.clips.flatMap((clip) =>
+                clip.track.beatTimesMs.map((beatMs) => clip.timelineStartMs + beatMs)
+              )
+            : [];
+        const medleyBeatAccents =
+          mode === 'metronome'
+            ? medleyPlan.clips.flatMap((clip) =>
+                createAccentFlags(clip.track.beatTimesMs.length, clip.track.beatsPerBar)
+              )
+            : [];
+        const medleyBeatGainValues =
+          mode === 'metronome'
+            ? medleyPlan.clips.flatMap((clip) =>
+                Array.from(
+                  { length: clip.track.beatTimesMs.length },
+                  () => dbToLinear(clip.track.metronomeVolumeDb + project.mixTuning.beatGainDb)
+                )
+              )
+            : [];
+        const segment = createRenderedSegment({
+          label: '串烧试听',
+          previewDurationMs: medleyPlan.durationMs,
+          sourceFilePath: playbackSourcePath,
+          beatTimesMs: medleyBeatTimes,
+          beatAccents: medleyBeatAccents,
+          beatGainValues: medleyBeatGainValues,
+          beatsPerBar: project.mixTuning.beatsPerBar,
+          metronomeSamplePath,
+          beatRenderMode: project.mixTuning.beatRenderMode,
+          beatOriginalBpm: project.mixTuning.beatOriginalBpm,
+          metronomeBpm: project.globalTargetBpm,
+          resolveTrackId: (previewTimeMs) =>
+            medleyPlan.clips.find(
+              (clip) =>
+                previewTimeMs >= clip.timelineStartMs && previewTimeMs < clip.timelineEndMs
+            )?.track.trackId ?? medleyPlan.clips.at(-1)?.track.trackId ?? null,
+          resolveLabel: (previewTimeMs) => {
+            const currentClip =
+              medleyPlan.clips.find(
+                (clip) =>
+                  previewTimeMs >= clip.timelineStartMs && previewTimeMs < clip.timelineEndMs
+              ) ?? medleyPlan.clips.at(-1);
+            if (!currentClip) {
+              return '串烧试听';
+            }
+            const index = medleyPlan.clips.findIndex(
+              (clip) => clip.track.trackId === currentClip.track.trackId
+            );
+            return `${index + 1}. ${currentClip.track.trackName}`;
+          }
+        });
+        logPreviewDebug('medley-preview-ready', {
+          mode,
+          strategy: 'full-render-crossfade',
+          previewFileName: playbackPayload.fileName,
+          durationMs: medleyPlan.durationMs,
+          beatCount: medleyBeatTimes.length,
+          metronomeSamplePath,
+          firstBeatGain:
+            medleyBeatGainValues.length > 0
+              ? Number((medleyBeatGainValues[0] ?? 1).toFixed(4))
+              : null
+        });
+        await playSegments([segment], token, startPreviewMs, set);
+      } catch (error) {
+        if (requestToken !== playbackRequestToken) {
+          return;
+        }
+        stopEverything();
+        const message = error instanceof Error ? error.message : String(error);
+        pushDebug(set, `串烧试听失败 | ${message}`);
+        set({
+          isPlaying: false,
+          playingTrackId: null,
+          currentTimeMs: 0,
+          currentLabel: message,
+          lastError: message
+        });
+      }
+      return;
+    }
+
+    type RuntimeMedleySegment =
+      | {
+          kind: 'gap';
+          durationMs: number;
+        }
+      | {
+          kind: 'track';
+          durationMs: number;
+          trackId: string;
+          label: string;
+          previewPlan: ReturnType<typeof buildSingleTrackPreviewExportPlan>;
+          beatTimesMs: number[];
+          beatAccents: boolean[];
+          beatGainValues: number[];
+          beatsPerBar: number;
+          metronomeBpm: number;
+        };
+
+    const tracksById = new Map(project.tracks.map((track) => [track.id, track] as const));
+    const runtimeSegments: RuntimeMedleySegment[] = [];
+    let runtimeCursorMs = 0;
+
+    medleyPlan.clips.forEach((clip, index) => {
+      const sourceTrack = tracksById.get(clip.track.trackId);
+      if (!sourceTrack) {
+        return;
+      }
+
+      const clipStartMs = Math.max(0, Math.round(clip.timelineStartMs));
+      if (clipStartMs > runtimeCursorMs) {
+        runtimeSegments.push({
+          kind: 'gap',
+          durationMs: clipStartMs - runtimeCursorMs
+        });
+        runtimeCursorMs = clipStartMs;
+      }
+
+      const clipDurationMs = Math.max(0, Math.round(clip.track.processedDurationMs));
+      if (clipDurationMs <= 0) {
+        return;
+      }
+
+      const beatGainLinear = dbToLinear(clip.track.metronomeVolumeDb + project.mixTuning.beatGainDb);
+      runtimeSegments.push({
+        kind: 'track',
+        durationMs: clipDurationMs,
+        trackId: clip.track.trackId,
+        label: `${index + 1}. ${clip.track.trackName}`,
+        previewPlan: buildSingleTrackPreviewExportPlan(sourceTrack, project),
+        beatTimesMs: clip.track.beatTimesMs,
+        beatAccents: createAccentFlags(clip.track.beatTimesMs.length, clip.track.beatsPerBar),
+        beatGainValues: Array.from({ length: clip.track.beatTimesMs.length }, () => beatGainLinear),
+        beatsPerBar: clip.track.beatsPerBar,
+        metronomeBpm: clip.track.metronomeBpm
+      });
+      runtimeCursorMs += clipDurationMs;
+    });
+
+    if (runtimeSegments.length === 0) {
+      set({
+        isPlaying: false,
+        playingTrackId: null,
+        currentTimeMs: 0,
+        currentLabel: ''
+      });
+      return;
+    }
+
+    const runtimeDurationMs = runtimeSegments.reduce((sum, segment) => sum + segment.durationMs, 0);
+    const runtimeSegmentStartMs: number[] = [];
+    {
+      let segmentCursorMs = 0;
+      for (const segment of runtimeSegments) {
+        runtimeSegmentStartMs.push(segmentCursorMs);
+        segmentCursorMs += segment.durationMs;
+      }
+    }
+    const normalizedStartMs = Math.max(0, Math.min(runtimeDurationMs, startPreviewMs));
+    let startSegmentIndex = 0;
+    let startOffsetInSegmentMs = normalizedStartMs;
+    while (
+      startSegmentIndex < runtimeSegments.length &&
+      startOffsetInSegmentMs >= runtimeSegments[startSegmentIndex].durationMs
+    ) {
+      startOffsetInSegmentMs -= runtimeSegments[startSegmentIndex].durationMs;
+      startSegmentIndex += 1;
+    }
+
+    const payloadTaskBySegmentIndex = new Map<number, Promise<PreparedPlaybackAudio>>();
+    const ensureTrackPayloadTask = (
+      segmentIndex: number
+    ): Promise<PreparedPlaybackAudio> => {
+      const existing = payloadTaskBySegmentIndex.get(segmentIndex);
+      if (existing) {
+        return existing;
+      }
+      const segment = runtimeSegments[segmentIndex];
+      if (!segment || segment.kind !== 'track') {
+        return Promise.reject(new Error(`非法串烧分段索引: ${segmentIndex}`));
+      }
+      const task = window.beatStride.prepareSinglePreviewAudio({
+        plan: segment.previewPlan,
         mode: 'processed'
       });
+      void task.then(() => {
+        if (!medleySeekFallbackEnabled || requestToken !== playbackRequestToken) {
+          return;
+        }
+        const segmentStartMs = runtimeSegmentStartMs[segmentIndex] ?? 0;
+        const segmentEndMs = segmentStartMs + segment.durationMs;
+        medleySeekFallbackMs = Math.max(medleySeekFallbackMs, Math.max(0, segmentEndMs - 1));
+      });
+      payloadTaskBySegmentIndex.set(segmentIndex, task);
+      return task;
+    };
+    const prewarmNextTrackPayload = (fromIndex: number): void => {
+      for (let index = fromIndex; index < runtimeSegments.length; index += 1) {
+        const segment = runtimeSegments[index];
+        if (segment.kind !== 'track') {
+          continue;
+        }
+        ensureTrackPayloadTask(index);
+        return;
+      }
+    };
+
+    try {
       const metronomeBufferTask =
         mode === 'metronome'
           ? loadMetronomeBuffer(metronomeSamplePath)
           : Promise.resolve(null);
-      const [playbackPayload] = await Promise.all([previewPayloadTask, metronomeBufferTask]);
+      prewarmNextTrackPayload(startSegmentIndex);
+      await metronomeBufferTask;
       if (requestToken !== playbackRequestToken) {
         return;
       }
+
       stopActivePlayback();
+      medleySeekFallbackEnabled = true;
+      medleySeekFallbackMs = Math.max(0, normalizedStartMs);
+      activePlaybackSegments = [];
       const token = playbackToken;
-      const playbackSourcePath = resolvePreparedAudioSource(playbackPayload);
-      pushDebug(set, `串烧预览音频已就绪 | ${playbackPayload.fileName}`);
-      const medleyBeatTimes =
-        mode === 'metronome'
-          ? medleyPlan.clips.flatMap((clip) =>
-              clip.track.beatTimesMs.map((beatMs) => clip.timelineStartMs + beatMs)
-            )
-          : [];
-      const medleyBeatAccents =
-        mode === 'metronome'
-          ? medleyPlan.clips.flatMap((clip) =>
-              createAccentFlags(clip.track.beatTimesMs.length, clip.track.beatsPerBar)
-            )
-          : [];
-      const medleyBeatGainValues =
-        mode === 'metronome'
-          ? medleyPlan.clips.flatMap((clip) =>
-              Array.from(
-                { length: clip.track.beatTimesMs.length },
-                () => dbToLinear(clip.track.metronomeVolumeDb + project.mixTuning.beatGainDb)
-              )
-            )
-          : [];
-      const segment = createRenderedSegment({
-        label: '串烧试听',
-        previewDurationMs: medleyPlan.durationMs,
-        sourceFilePath: playbackSourcePath,
-        beatTimesMs: medleyBeatTimes,
-        beatAccents: medleyBeatAccents,
-        beatGainValues: medleyBeatGainValues,
-        beatsPerBar: project.mixTuning.beatsPerBar,
-        metronomeSamplePath,
-        beatRenderMode: project.mixTuning.beatRenderMode,
-        beatOriginalBpm: project.mixTuning.beatOriginalBpm,
-        metronomeBpm: project.globalTargetBpm,
-        resolveTrackId: (previewTimeMs) =>
-          medleyPlan.clips.find(
-            (clip) =>
-              previewTimeMs >= clip.timelineStartMs && previewTimeMs < clip.timelineEndMs
-          )?.track.trackId ?? medleyPlan.clips.at(-1)?.track.trackId ?? null,
-        resolveLabel: (previewTimeMs) => {
-          const currentClip =
-            medleyPlan.clips.find(
-              (clip) =>
-                previewTimeMs >= clip.timelineStartMs && previewTimeMs < clip.timelineEndMs
-            ) ?? medleyPlan.clips.at(-1);
-          if (!currentClip) {
-            return '串烧试听';
-          }
-          const index = medleyPlan.clips.findIndex(
-            (clip) => clip.track.trackId === currentClip.track.trackId
-          );
-          return `${index + 1}. ${currentClip.track.trackName}`;
-        }
-      });
       logPreviewDebug('medley-preview-ready', {
         mode,
-        previewFileName: playbackPayload.fileName,
-        durationMs: medleyPlan.durationMs,
-        beatCount: medleyBeatTimes.length,
-        metronomeSamplePath,
-        firstBeatGain:
-          medleyBeatGainValues.length > 0
-            ? Number((medleyBeatGainValues[0] ?? 1).toFixed(4))
-            : null
+        strategy: 'segmented-stream',
+        segmentCount: runtimeSegments.length,
+        durationMs: runtimeDurationMs,
+        metronomeSamplePath
       });
-      await playSegments([segment], token, startPreviewMs, set);
+
+      let baseMs = runtimeSegments
+        .slice(0, startSegmentIndex)
+        .reduce((sum, segment) => sum + segment.durationMs, 0);
+
+      for (let index = startSegmentIndex; index < runtimeSegments.length; index += 1) {
+        if (token !== playbackToken) {
+          return;
+        }
+        const segment = runtimeSegments[index];
+        const startOffsetMs = index === startSegmentIndex ? startOffsetInSegmentMs : 0;
+
+        if (segment.kind === 'gap') {
+          await runGapSegment(
+            {
+              kind: 'gap',
+              label: '间隔',
+              trackId: null,
+              previewDurationMs: segment.durationMs
+            },
+            baseMs,
+            token,
+            startOffsetMs,
+            set
+          );
+          baseMs += segment.durationMs;
+          continue;
+        }
+
+        const payloadTask = ensureTrackPayloadTask(index);
+        prewarmNextTrackPayload(index + 1);
+        const playbackPayload = await payloadTask;
+        if (token !== playbackToken) {
+          return;
+        }
+        const playbackSourcePath = await resolvePreparedAudioSource(playbackPayload);
+        pushDebug(set, `串烧分段就绪 | ${segment.label}`);
+        await runTrackSegment(
+          createRenderedSegment({
+            label: segment.label,
+            trackId: segment.trackId,
+            previewDurationMs: segment.durationMs,
+            sourceFilePath: playbackSourcePath,
+            beatTimesMs: mode === 'metronome' ? segment.beatTimesMs : [],
+            beatAccents: mode === 'metronome' ? segment.beatAccents : [],
+            beatGainValues: mode === 'metronome' ? segment.beatGainValues : [],
+            beatsPerBar: segment.beatsPerBar,
+            metronomeSamplePath,
+            beatRenderMode: project.mixTuning.beatRenderMode,
+            beatOriginalBpm: project.mixTuning.beatOriginalBpm,
+            metronomeBpm: segment.metronomeBpm
+          }),
+          baseMs,
+          token,
+          startOffsetMs,
+          set
+        );
+        baseMs += segment.durationMs;
+      }
+
+      if (token === playbackToken) {
+        stopEverything();
+        set({
+          isPlaying: false,
+          playingTrackId: null,
+          currentTimeMs: 0,
+          currentLabel: ''
+        });
+      }
     } catch (error) {
       if (requestToken !== playbackRequestToken) {
         return;

@@ -39,6 +39,10 @@ interface ProxyGenerationState {
   cancelRequested: boolean;
 }
 
+function logSeekApp(payload: Record<string, unknown>): void {
+  console.info('[BeatStride][seek-app]', payload);
+}
+
 async function mapWithConcurrency<TInput, TResult>(
   items: TInput[],
   concurrency: number,
@@ -194,6 +198,18 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
       return;
     }
     void playbackStore.playMedley(project, { startPreviewMs });
+  };
+
+  const handleSelectTrack = (trackId: string, syncChecked = false) => {
+    const currentSelectedTrackId = useProjectStore.getState().activeTimelineTrackId;
+    const playback = usePlaybackStore.getState();
+    if (trackId !== currentSelectedTrackId && playback.isPlaying) {
+      playbackStore.stop();
+    }
+    projectStore.selectTimelineTrack(trackId);
+    if (syncChecked) {
+      projectStore.setLibraryCheckedIds([trackId]);
+    }
   };
 
   const formatProxyGenerationTitle = () => {
@@ -364,12 +380,29 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const handleSeekPreview = (requestedTimeMs: number) => {
     if (!project) {
+      logSeekApp({
+        status: 'skip-no-project',
+        requestedTimeMs
+      });
       return;
     }
     const playback = usePlaybackStore.getState();
+    logSeekApp({
+      status: 'seek-request',
+      requestedTimeMs,
+      target: playback.target,
+      mode: playback.mode,
+      isPlaying: playback.isPlaying,
+      currentTimeMs: playback.currentTimeMs,
+      selectedTrackId: selectedTrack?.id ?? null
+    });
 
     if (playback.target === 'single') {
       if (!selectedTrack) {
+        logSeekApp({
+          status: 'skip-single-without-track',
+          requestedTimeMs
+        });
         return;
       }
       const previewPlan = buildSingleTrackPreviewPlan(selectedTrack, project);
@@ -378,20 +411,50 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
           ? previewPlan.trimmedSourceDurationMs
           : previewPlan.processedDurationMs;
       const nextPositionMs = Math.max(0, Math.min(durationMs, Math.round(requestedTimeMs)));
+      logSeekApp({
+        status: 'single-clamped',
+        requestedTimeMs,
+        durationMs,
+        nextPositionMs,
+        trackId: selectedTrack.id
+      });
       if (playback.isPlaying) {
-        if (!playbackStore.seekToPreviewPosition(nextPositionMs)) {
+        const seekSucceeded = playbackStore.seekToPreviewPosition(nextPositionMs);
+        logSeekApp({
+          status: 'single-seek-playing',
+          nextPositionMs,
+          seekSucceeded,
+          trackId: selectedTrack.id
+        });
+        if (!seekSucceeded) {
+          logSeekApp({
+            status: 'single-fallback-replay',
+            nextPositionMs,
+            trackId: selectedTrack.id
+          });
           void playbackStore.playTrack(selectedTrack, project, {
             startPreviewMs: nextPositionMs
           });
         }
         return;
       }
+      logSeekApp({
+        status: 'single-set-preview-position',
+        nextPositionMs,
+        trackId: selectedTrack.id
+      });
       playbackStore.setPreviewPosition(nextPositionMs, selectedTrack.name, selectedTrack.id);
       return;
     }
 
     const medleyPlan = buildProjectPreviewExportPlan(project);
-    const nextPositionMs = Math.max(0, Math.min(medleyPlan.durationMs, Math.round(requestedTimeMs)));
+    const medleyPreviewDurationMs =
+      medleyPlan.clips.reduce((sum, clip) => sum + clip.track.processedDurationMs, 0) +
+      Math.max(0, medleyPlan.clips.length - 1) * Math.max(0, project.exportPreset.gapMs);
+    const nextPositionMs = Math.max(
+      0,
+      Math.min(medleyPreviewDurationMs, Math.round(requestedTimeMs))
+    );
     const currentClip =
       medleyPlan.clips.find(
         (clip) =>
@@ -405,15 +468,52 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
         ? `${clipIndex + 1}. ${currentClip.track.trackName}`
         : '串烧试听';
     const nextTrackId = currentClip?.track.trackId ?? null;
+    logSeekApp({
+      status: 'medley-clamped',
+      requestedTimeMs,
+      durationMs: medleyPreviewDurationMs,
+      nextPositionMs,
+      nextTrackId,
+      nextLabel
+    });
 
     if (playback.isPlaying) {
-      if (!playbackStore.seekToPreviewPosition(nextPositionMs)) {
+      const seekSucceeded = playbackStore.seekToPreviewPosition(nextPositionMs);
+      logSeekApp({
+        status: 'medley-seek-playing',
+        nextPositionMs,
+        seekSucceeded,
+        nextTrackId
+      });
+      if (!seekSucceeded) {
+        const fallbackPositionMs = playbackStore.resolveMedleySeekFallbackMs(nextPositionMs);
+        const replayPositionMs = Math.max(0, Math.min(nextPositionMs, fallbackPositionMs));
+        logSeekApp({
+          status: 'medley-fallback-replay',
+          nextPositionMs,
+          nextTrackId,
+          fallbackPositionMs,
+          replayPositionMs
+        });
+        if (Math.abs(replayPositionMs - playback.currentTimeMs) <= 80) {
+          logSeekApp({
+            status: 'medley-fallback-keep-playing',
+            replayPositionMs,
+            currentTimeMs: playback.currentTimeMs
+          });
+          return;
+        }
         void playbackStore.playMedley(project, {
-          startPreviewMs: nextPositionMs
+          startPreviewMs: replayPositionMs
         });
       }
       return;
     }
+    logSeekApp({
+      status: 'medley-set-preview-position',
+      nextPositionMs,
+      nextTrackId
+    });
     playbackStore.setPreviewPosition(nextPositionMs, nextLabel, nextTrackId);
   };
 
@@ -583,7 +683,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
             tracks={pendingTracks}
             checkedTrackIds={projectStore.libraryCheckedIds}
             selectedTrackId={selectedTrack?.id}
-            onSelectTrack={projectStore.selectTimelineTrack}
+            onSelectTrack={handleSelectTrack}
             onToggleTrack={projectStore.toggleLibraryCheck}
             onToggleAll={(checked) =>
               projectStore.setLibraryCheckedIds(
@@ -622,8 +722,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
             onChangeVolume={playbackStore.setVolume}
             onSeekPreview={handleSeekPreview}
             onSelectTrack={(trackId) => {
-              projectStore.selectTimelineTrack(trackId);
-              projectStore.setLibraryCheckedIds([trackId]);
+              handleSelectTrack(trackId, true);
             }}
             onToggleTrackCheck={projectStore.toggleLibraryCheck}
             onToggleAllQueueChecked={(checked) =>

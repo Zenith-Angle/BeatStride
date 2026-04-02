@@ -171,6 +171,75 @@ function tryReuseProjectProxy(plan: SingleTrackExportPlan): string | null {
   return fs.existsSync(proxyPath) ? proxyPath : null;
 }
 
+function resolveSinglePreviewSourcePlan(plan: SingleTrackExportPlan): {
+  plan: SingleTrackExportPlan;
+  usedProxy: boolean;
+} {
+  const proxyPath = tryReuseProjectProxy(plan);
+  if (!proxyPath) {
+    return { plan, usedProxy: false };
+  }
+  return {
+    plan: {
+      ...plan,
+      track: {
+        ...plan.track,
+        sourceFilePath: proxyPath
+      }
+    },
+    usedProxy: true
+  };
+}
+
+function buildClipProxyLookupPlan(
+  plan: MedleyExportPlan,
+  clip: MedleyExportPlan['clips'][number]
+): SingleTrackExportPlan {
+  return {
+    mode: 'single',
+    projectFilePath: plan.projectFilePath,
+    outputDir: plan.outputDir,
+    format: plan.format,
+    normalizeLoudness: plan.normalizeLoudness,
+    metronomeSamplePath: plan.metronomeSamplePath,
+    renderOptions: plan.renderOptions,
+    track: clip.track
+  };
+}
+
+function resolveMedleyPreviewSourcePlan(plan: MedleyExportPlan): {
+  plan: MedleyExportPlan;
+  usedProxyTrackCount: number;
+} {
+  let usedProxyTrackCount = 0;
+  const nextClips = plan.clips.map((clip) => {
+    const proxyPath = tryReuseProjectProxy(buildClipProxyLookupPlan(plan, clip));
+    if (!proxyPath) {
+      return clip;
+    }
+    usedProxyTrackCount += 1;
+    return {
+      ...clip,
+      track: {
+        ...clip.track,
+        sourceFilePath: proxyPath
+      }
+    };
+  });
+
+  if (usedProxyTrackCount === 0) {
+    return { plan, usedProxyTrackCount: 0 };
+  }
+
+  return {
+    plan: {
+      ...plan,
+      clips: nextClips
+    },
+    usedProxyTrackCount
+  };
+}
+
 function hasAnyTrackProxy(projectFilePath: string, trackId: string): boolean {
   const proxyDir = getProjectProxyDir(projectFilePath);
   if (!proxyDir || !fs.existsSync(proxyDir)) {
@@ -395,7 +464,7 @@ function buildSinglePreviewCachePath(
       JSON.stringify({
         mode,
         plan: derivedPlan,
-        source: buildFileStatSignature(plan.track.sourceFilePath),
+        source: buildFileStatSignature(derivedPlan.track.sourceFilePath),
         metronomeSample: buildFileStatSignature(plan.metronomeSamplePath),
         bitrateKbps: PREVIEW_BITRATE_KBPS
       })
@@ -721,8 +790,19 @@ export async function renderSinglePreviewPayload(
   plan: SingleTrackExportPlan,
   mode: 'original' | 'processed' | 'metronome'
 ): Promise<PreparedPlaybackAudio> {
-  const previewPlan = buildSinglePreviewPlan(plan, mode);
-  const outputPath = buildSinglePreviewCachePath(plan, mode);
+  const resolvedSource = resolveSinglePreviewSourcePlan(plan);
+  const previewPlan = buildSinglePreviewPlan(resolvedSource.plan, mode);
+  const outputPath = buildSinglePreviewCachePath(resolvedSource.plan, mode);
+
+  if (resolvedSource.usedProxy) {
+    console.info('[BeatStride][preview-source]', {
+      mode: 'single',
+      trackId: plan.track.trackId,
+      source: 'project-proxy',
+      filePath: resolvedSource.plan.track.sourceFilePath
+    });
+  }
+
   if (!fs.existsSync(outputPath)) {
     await renderSingleToFile(
       ffmpegPath,
@@ -743,8 +823,19 @@ export async function renderMedleyPreviewPayload(
   plan: MedleyExportPlan,
   mode: 'processed' | 'metronome'
 ): Promise<PreparedPlaybackAudio> {
-  const previewPlan = buildMedleyPreviewPlan(plan, mode);
-  const outputPath = buildMedleyPreviewCachePath(plan, mode);
+  const resolvedSource = resolveMedleyPreviewSourcePlan(plan);
+  const previewPlan = buildMedleyPreviewPlan(resolvedSource.plan, mode);
+  const outputPath = buildMedleyPreviewCachePath(resolvedSource.plan, mode);
+
+  if (resolvedSource.usedProxyTrackCount > 0) {
+    console.info('[BeatStride][preview-source]', {
+      mode: 'medley',
+      source: 'project-proxy',
+      usedProxyTrackCount: resolvedSource.usedProxyTrackCount,
+      totalTrackCount: plan.clips.length
+    });
+  }
+
   if (!fs.existsSync(outputPath)) {
     await renderMedleyToFile(
       ffmpegPath,
