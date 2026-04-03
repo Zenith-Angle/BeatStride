@@ -756,18 +756,92 @@ select {
 
 .preview-audition-block {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  align-content: start;
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
+}
+
+.preview-audition-tabs {
+  display: flex;
+  justify-content: center;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-panel) 92%, #fff),
+    color-mix(in srgb, var(--bg-panel) 76%, var(--bg))
+  );
+}
+
+.preview-audition-tabs-track {
+  display: inline-grid;
+  grid-auto-flow: column;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), color-mix(in srgb, var(--surface-paper) 90%, var(--bg-elevated))),
+    linear-gradient(135deg, color-mix(in srgb, var(--surface-water) 10%, transparent), transparent 58%);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, var(--surface-paper));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 8px 20px rgba(var(--shadow-color-rgb), 0.08);
+}
+
+.preview-audition-tab {
+  min-width: 110px;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-subtle);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.preview-audition-tab:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: color-mix(in srgb, var(--line) 86%, var(--surface-paper));
+}
+
+.preview-audition-tab.active {
+  color: #ffffff;
+  border-color: color-mix(in srgb, var(--primary) 88%, #ffffff);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--primary) 88%, #fff), color-mix(in srgb, var(--accent) 52%, var(--primary))),
+    radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.26), transparent 52%);
+  box-shadow:
+    0 12px 24px rgba(var(--shadow-color-rgb), 0.16),
+    0 0 0 1px rgba(255, 255, 255, 0.16) inset;
+}
+
+.preview-audition-viewport {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.preview-audition-pages {
+  display: flex;
+  width: 200%;
+  height: 100%;
+  transition: transform 220ms var(--ease-organic);
+}
+
+.preview-audition-page {
+  flex: 0 0 50%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
   scrollbar-gutter: stable;
 }
 
 .preview-function-strip {
   display: grid;
   place-items: center;
-  padding: 12px 18px 10px;
+  padding: 8px 16px 7px;
   border-bottom: 1px solid var(--line);
   background: linear-gradient(
     180deg,
@@ -781,19 +855,19 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 14px;
+  gap: 10px;
   flex-wrap: nowrap;
 }
 
 .preview-toggle-group {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   justify-items: center;
 }
 
 .preview-toggle-group-label {
   color: var(--text-subtle);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -802,8 +876,8 @@ select {
 .preview-icon-cluster {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
+  gap: 6px;
+  padding: 6px;
   border-radius: 999px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.88), color-mix(in srgb, var(--surface-paper) 88%, var(--bg-panel))),
@@ -815,7 +889,7 @@ select {
 }
 
 .preview-icon-divider {
-  width: 24px;
+  width: 18px;
   height: 1px;
   background: linear-gradient(
     90deg,
@@ -836,12 +910,12 @@ select {
 }
 
 .preview-toggle-btn {
-  min-width: 84px;
-  height: 42px;
-  padding: 0 14px;
+  min-width: 74px;
+  height: 36px;
+  padding: 0 12px;
   grid-auto-flow: column;
-  gap: 8px;
-  border-radius: 14px;
+  gap: 6px;
+  border-radius: 12px;
   color: var(--text-subtle);
   border: 1px solid color-mix(in srgb, var(--line) 84%, var(--surface-paper));
   background:
@@ -869,7 +943,7 @@ select {
 }
 
 .preview-toggle-label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
@@ -1285,13 +1359,26 @@ select {
 }
 
 @media (max-width: 720px) {
+  .preview-audition-tabs {
+    padding: 8px 12px 6px;
+  }
+
+  .preview-audition-tabs-track {
+    width: 100%;
+  }
+
+  .preview-audition-tab {
+    min-width: 0;
+    width: 100%;
+  }
+
   .preview-function-strip {
-    padding: 10px 12px 8px;
+    padding: 7px 12px 6px;
   }
 
   .preview-icon-strip {
     width: 100%;
-    gap: 8px;
+    gap: 6px;
   }
 
   .preview-toggle-group {
