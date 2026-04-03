@@ -756,9 +756,12 @@ select {
 
 .preview-audition-block {
   display: grid;
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr);
   align-content: start;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 
 .preview-function-strip {
@@ -1316,6 +1319,10 @@ select {
 
   .preview-visualizer-card {
     padding: 14px;
+  }
+
+  .preview-visualizer-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .preview-visualizer-stage {
@@ -2424,7 +2431,7 @@ select {
 }
 
 .preview-visualizer {
-  padding: 14px 18px 18px;
+  padding: 10px 18px 18px;
   border-top: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface-paper) 34%, transparent), transparent),
@@ -2433,8 +2440,8 @@ select {
 
 .preview-visualizer-card {
   display: grid;
-  gap: 14px;
-  padding: 16px 18px;
+  gap: 12px;
+  padding: 14px 16px;
   border: 1px solid color-mix(in srgb, var(--line) 82%, var(--surface-paper));
   border-radius: 22px;
   background:
@@ -2447,15 +2454,15 @@ select {
 
 .preview-visualizer-header {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) auto;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
 }
 
 .preview-visualizer-heading {
   min-width: 0;
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .preview-visualizer-kicker {
@@ -2467,45 +2474,50 @@ select {
 .preview-visualizer-title {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   color: var(--text);
-  font-size: 18px;
-  line-height: 1.25;
+  font-size: 17px;
+  line-height: 1.2;
 }
 
 .preview-visualizer-subtitle {
   color: var(--text-subtle);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 36ch;
 }
 
 .preview-visualizer-meta {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  width: 100%;
 }
 
 .preview-visualizer-chip {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 34px;
-  padding: 0 14px;
+  justify-content: flex-start;
+  min-height: 32px;
+  padding: 0 12px;
   border: 1px solid color-mix(in srgb, var(--line) 84%, var(--surface-paper));
   border-radius: 999px;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface-paper) 84%, #ffffff), color-mix(in srgb, var(--surface-card-mint) 18%, var(--bg-elevated))),
     linear-gradient(90deg, color-mix(in srgb, var(--surface-water) 8%, transparent), transparent 60%);
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .preview-visualizer-ruler {
   position: relative;
-  height: 16px;
+  height: 14px;
 }
 
 .preview-visualizer-ruler-label {
@@ -2513,7 +2525,7 @@ select {
   top: 0;
   transform: translateX(-50%);
   color: var(--text-subtle);
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1;
   white-space: nowrap;
 }
@@ -2528,7 +2540,7 @@ select {
 
 .preview-visualizer-stage {
   position: relative;
-  min-height: 170px;
+  min-height: 142px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--line) 78%, var(--surface-paper));
   border-radius: 18px;
@@ -2540,7 +2552,7 @@ select {
 .preview-visualizer-stage::before {
   content: '';
   position: absolute;
-  inset: 12px 0 24px;
+  inset: 10px 0 22px;
   border-top: 1px dashed color-mix(in srgb, var(--line) 76%, transparent);
   border-bottom: 1px dashed color-mix(in srgb, var(--line) 76%, transparent);
   pointer-events: none;
@@ -2548,16 +2560,16 @@ select {
 
 .preview-waveform {
   position: absolute;
-  inset: 18px 14px 28px;
+  inset: 16px 12px 24px;
   display: grid;
   grid-template-columns: repeat(72, minmax(0, 1fr));
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 
 .preview-waveform-bar {
   width: 100%;
-  height: calc(12px + var(--wave-height) * 56px);
+  height: calc(10px + var(--wave-height) * 46px);
   align-self: center;
   border-radius: 999px;
   background:
@@ -2577,8 +2589,8 @@ select {
 }
 
 .preview-grid-line {
-  top: 18px;
-  bottom: 28px;
+  top: 16px;
+  bottom: 24px;
   width: 1px;
 }
 
@@ -2593,9 +2605,9 @@ select {
 }
 
 .preview-metronome-dot {
-  bottom: 14px;
-  width: 8px;
-  height: 8px;
+  bottom: 12px;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 78%, #ffffff);
   box-shadow:
@@ -2604,8 +2616,8 @@ select {
 }
 
 .preview-marker-line {
-  top: 10px;
-  bottom: 10px;
+  top: 8px;
+  bottom: 8px;
   width: 2px;
   border-radius: 999px;
 }
@@ -2628,13 +2640,13 @@ select {
   transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 0 8px;
+  min-height: 22px;
+  padding: 0 7px;
   border: 1px solid color-mix(in srgb, var(--line) 84%, var(--surface-paper));
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-paper) 92%, #ffffff);
   color: var(--text);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   line-height: 1;
   white-space: nowrap;
@@ -2642,24 +2654,24 @@ select {
 }
 
 .preview-marker-label.downbeat {
-  top: 8px;
+  top: 6px;
 }
 
 .preview-marker-label.metronome {
-  bottom: 28px;
+  bottom: 22px;
 }
 
 .preview-marker-label.playhead {
-  top: 8px;
+  top: 6px;
   z-index: 4;
 }
 
 .preview-visualizer-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 14px;
+  gap: 8px 12px;
   color: var(--text-subtle);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .preview-visualizer-legend-item {
@@ -2708,7 +2720,7 @@ select {
 }
 
 .preview-visualizer-empty {
-  min-height: 170px;
+  min-height: 142px;
   display: grid;
   place-items: center;
   text-align: center;
