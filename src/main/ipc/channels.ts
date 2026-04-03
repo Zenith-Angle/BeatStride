@@ -18,6 +18,7 @@ export const IPC_CHANNELS = {
   projectLoadRecovery: 'project:load-recovery',
   audioProbe: 'audio:probe',
   audioDetectTempo: 'audio:detect-tempo',
+  audioGetWaveform: 'audio:get-waveform',
   audioPreparePlayback: 'audio:prepare-playback',
   audioPrepareSinglePreview: 'audio:prepare-single-preview',
   audioPrepareMedleyPreview: 'audio:prepare-medley-preview',

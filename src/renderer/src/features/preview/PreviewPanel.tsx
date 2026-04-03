@@ -5,7 +5,8 @@ import {
   useState,
   type ChangeEvent,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent
 } from 'react';
 import {
   AlarmClock,
@@ -23,7 +24,7 @@ import {
   VolumeX
 } from 'lucide-react';
 import { generateBeatTimes } from '@shared/services/beatGridService';
-import type { ProjectFile, Track, TrackProxyStatus } from '@shared/types';
+import type { AudioWaveformData, ProjectFile, Track, TrackProxyStatus } from '@shared/types';
 import { buildProjectPreviewPlan, buildSingleTrackPreviewPlan } from '@shared/services/previewPlanService';
 import { getWorkspaceTracks } from '@shared/services/workspaceOrderService';
 import { formatMs } from '@shared/utils/time';
@@ -64,47 +65,53 @@ interface PreviewPanelProps {
   onRemoveCheckedFromQueue: () => void;
 }
 
-const WAVEFORM_BAR_COUNT = 72;
+const WAVEFORM_POINT_COUNT = 1200;
+const WAVEFORM_VIEWBOX_WIDTH = 1000;
+const WAVEFORM_VIEWBOX_HEIGHT = 220;
+const WAVEFORM_CENTER_Y = WAVEFORM_VIEWBOX_HEIGHT / 2;
+const MIN_WAVEFORM_ZOOM = 1;
+const MAX_WAVEFORM_ZOOM = 12;
 const RULER_STOPS = [0, 0.25, 0.5, 0.75, 1];
 
 function clampToRange(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function hashString(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+function buildWaveformAreaPath(peaks: number[]): string {
+  if (peaks.length === 0) {
+    return '';
   }
-  return hash;
+
+  const denominator = Math.max(1, peaks.length - 1);
+  const topPoints = peaks.map((peak, index) => {
+    const x = (index / denominator) * WAVEFORM_VIEWBOX_WIDTH;
+    const y = WAVEFORM_CENTER_Y - peak * (WAVEFORM_VIEWBOX_HEIGHT * 0.44);
+    return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  });
+  const bottomPoints = peaks
+    .map((_, index) => {
+      const reversedIndex = peaks.length - 1 - index;
+      const x = (reversedIndex / denominator) * WAVEFORM_VIEWBOX_WIDTH;
+      const y = WAVEFORM_CENTER_Y + peaks[reversedIndex]! * (WAVEFORM_VIEWBOX_HEIGHT * 0.44);
+      return `L ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(' ');
+  return `${topPoints.join(' ')} ${bottomPoints} Z`;
 }
 
-function buildWaveformBars(trackName: string, durationMs: number, beatIntervalMs: number): number[] {
-  const seed = hashString(`${trackName}:${Math.round(durationMs)}`);
-  const safeDurationMs = Math.max(1, durationMs);
-  const safeBeatIntervalMs = Math.max(240, beatIntervalMs);
+function buildWaveformStrokePath(peaks: number[]): string {
+  if (peaks.length === 0) {
+    return '';
+  }
 
-  return Array.from({ length: WAVEFORM_BAR_COUNT }, (_, index) => {
-    const ratio = WAVEFORM_BAR_COUNT <= 1 ? 0 : index / (WAVEFORM_BAR_COUNT - 1);
-    const timeMs = ratio * safeDurationMs;
-    const beatPhase = ((timeMs / safeBeatIntervalMs) + seed * 0.00037) % 1;
-    const beatPulse = 1 - Math.min(Math.abs(beatPhase), Math.abs(1 - beatPhase)) * 2;
-    const slowTexture = 0.5 + 0.5 * Math.sin(ratio * Math.PI * 4 + seed * 0.0019);
-    const fastTexture = 0.5 + 0.5 * Math.sin(ratio * Math.PI * 18 + seed * 0.0041);
-    const sectionLift = 0.5 + 0.5 * Math.sin(ratio * Math.PI * 2 - Math.PI / 3);
-    const centerLift = 1 - Math.abs(ratio - 0.5) * 0.55;
-    const amplitude = clampToRange(
-      0.16 +
-        beatPulse * 0.3 +
-        slowTexture * 0.2 +
-        fastTexture * 0.16 +
-        sectionLift * 0.14 +
-        centerLift * 0.12,
-      0.14,
-      0.96
-    );
-    return Number(amplitude.toFixed(3));
-  });
+  const denominator = Math.max(1, peaks.length - 1);
+  return peaks
+    .map((peak, index) => {
+      const x = (index / denominator) * WAVEFORM_VIEWBOX_WIDTH;
+      const y = WAVEFORM_CENTER_Y - peak * (WAVEFORM_VIEWBOX_HEIGHT * 0.44);
+      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(' ');
 }
 
 function toPercent(positionMs: number, durationMs: number): number {
@@ -151,6 +158,8 @@ export function PreviewPanel({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const queueListRef = useRef<HTMLDivElement | null>(null);
   const previewSeekRef = useRef<HTMLInputElement | null>(null);
+  const waveformScrollRef = useRef<HTMLDivElement | null>(null);
+  const waveformCacheRef = useRef(new Map<string, AudioWaveformData>());
   const scrubbingRef = useRef(false);
   const scrubValueRef = useRef(0);
   const suppressDirectSeekUntilRef = useRef(0);
@@ -176,6 +185,16 @@ export function PreviewPanel({
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [scrubValue, setScrubValue] = useState(0);
   const [auditionView, setAuditionView] = useState<'controls' | 'visualizer'>('controls');
+  const [waveformZoom, setWaveformZoom] = useState(1);
+  const [waveformState, setWaveformState] = useState<{
+    status: 'idle' | 'loading' | 'ready' | 'error';
+    data: AudioWaveformData | null;
+    error: string;
+  }>({
+    status: 'idle',
+    data: null,
+    error: ''
+  });
   type SeekCommitSource = 'window-release' | 'range-release' | 'change-direct';
   const getProxyStatusLabel = (proxyStatus: TrackProxyStatus) =>
     proxyStatus === 'ready'
@@ -229,12 +248,19 @@ export function PreviewPanel({
   const selectedTargetBpm = Math.round(
     selectedPlan?.targetBpm ?? selectedTrack?.targetBpm ?? project.globalTargetBpm
   );
+  const waveformRequestKey = selectedTrack
+    ? [
+        selectedTrack.filePath,
+        selectedTrack.durationMs,
+        selectedTrack.trimInMs,
+        selectedTrack.trimOutMs,
+        WAVEFORM_POINT_COUNT
+      ].join('|')
+    : '';
   const visualDurationMs = Math.max(1, selectedPlan?.processedDurationMs ?? 1);
-  const visualBeatIntervalMs = selectedPlan ? 60000 / Math.max(1, selectedPlan.targetBpm) : 0;
-  const waveformBars =
-    selectedTrack && selectedPlan
-      ? buildWaveformBars(selectedTrack.name, visualDurationMs, visualBeatIntervalMs)
-      : [];
+  const waveformPeaks = waveformState.data?.peaks ?? [];
+  const waveformAreaPath = buildWaveformAreaPath(waveformPeaks);
+  const waveformStrokePath = buildWaveformStrokePath(waveformPeaks);
   const visualMusicBeatTimes = selectedPlan
     ? generateBeatTimes(
         visualDurationMs,
@@ -273,14 +299,17 @@ export function PreviewPanel({
     : target === 'medley'
       ? '当前显示选中歌曲的处理时间轴，串烧试听不会改变这里的校准参考。'
       : mode === 'original'
-        ? '当前播放是原曲对比，但下方仍按变速后的校准时间轴显示首拍与节拍器关系。'
+        ? '看明显鼓点峰值是否稳定贴近节拍线；按住 Ctrl + 滚轮可以放大查看细节。'
         : selectedTrackProxyStatus === 'ready'
-          ? '这里按处理后的时间轴展示首拍、拍线和节拍器落点，适合直接判断是否贴拍。'
-          : '先在这里确认对齐关系，没问题后再生成代理或继续串烧试听。';
+          ? '橙线是音乐首拍，青线是节拍器起点；看主要鼓点峰值是否跟着节拍线稳定重合。'
+          : '先看真实波形里的鼓点峰值是否贴线，确认后再生成代理或继续串烧试听。';
   const visualMeta = selectedTrack
     ? [
         currentModeLabel,
         `${Math.round(selectedTrack.sourceBpm)} → ${selectedTargetBpm} BPM`,
+        Math.abs(selectedTrack.metronomeOffsetMs) <= 12
+          ? '起点已基本对齐'
+          : `起点偏移 ${selectedTrack.metronomeOffsetMs > 0 ? '+' : ''}${selectedTrack.metronomeOffsetMs} ms`,
         `首拍 ${selectedTrack.downbeatOffsetMs} ms`,
         `节拍器 ${selectedTrack.metronomeOffsetMs} ms`
       ]
@@ -438,6 +467,80 @@ export function PreviewPanel({
   useEffect(() => {
     queueTrackIdsRef.current = queueTracks.map((track) => track.id);
   }, [queueTracks]);
+
+  useEffect(() => {
+    setWaveformZoom(1);
+    if (waveformScrollRef.current) {
+      waveformScrollRef.current.scrollLeft = 0;
+    }
+  }, [waveformRequestKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!selectedTrack) {
+      setWaveformState({
+        status: 'idle',
+        data: null,
+        error: ''
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const cached = waveformCacheRef.current.get(waveformRequestKey);
+    if (cached) {
+      setWaveformState({
+        status: 'ready',
+        data: cached,
+        error: ''
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setWaveformState((current) => ({
+      status: 'loading',
+      data: current.data && waveformRequestKey ? current.data : null,
+      error: ''
+    }));
+
+    void window.beatStride
+      .getAudioWaveform({
+        filePath: selectedTrack.filePath,
+        durationMs: selectedTrack.durationMs,
+        trimInMs: selectedTrack.trimInMs,
+        trimOutMs: selectedTrack.trimOutMs,
+        points: WAVEFORM_POINT_COUNT
+      })
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+        waveformCacheRef.current.set(waveformRequestKey, data);
+        setWaveformState({
+          status: 'ready',
+          data,
+          error: ''
+        });
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setWaveformState({
+          status: 'error',
+          data: null,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTrack, waveformRequestKey]);
 
   useEffect(() => {
     reorderWorkTrackRef.current = onReorderTrack;
@@ -875,6 +978,46 @@ export function PreviewPanel({
     );
   };
 
+  const handleWaveformWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey) {
+      return;
+    }
+
+    const container = waveformScrollRef.current;
+    if (!container) {
+      return;
+    }
+
+    event.preventDefault();
+    const nextZoom = clampToRange(
+      Number((waveformZoom * (event.deltaY < 0 ? 1.14 : 1 / 1.14)).toFixed(3)),
+      MIN_WAVEFORM_ZOOM,
+      MAX_WAVEFORM_ZOOM
+    );
+
+    if (Math.abs(nextZoom - waveformZoom) < 0.001) {
+      return;
+    }
+
+    const rect = container.getBoundingClientRect();
+    const pointerOffsetX = event.clientX - rect.left;
+    const previousScrollWidth = Math.max(container.scrollWidth, 1);
+    const anchorRatio = clampToRange(
+      (container.scrollLeft + pointerOffsetX) / previousScrollWidth,
+      0,
+      1
+    );
+
+    setWaveformZoom(nextZoom);
+    requestAnimationFrame(() => {
+      const nextScrollWidth = Math.max(container.scrollWidth, 1);
+      container.scrollLeft = Math.max(
+        0,
+        anchorRatio * nextScrollWidth - pointerOffsetX
+      );
+    });
+  };
+
   return (
     <section className="panel">
       <div
@@ -1164,99 +1307,138 @@ export function PreviewPanel({
 
                     {selectedTrack && selectedPlan ? (
                       <>
-                        <div className="preview-visualizer-ruler" aria-hidden="true">
-                          {RULER_STOPS.map((stop) => (
-                            <span
-                              key={stop}
-                              className="preview-visualizer-ruler-label"
-                              style={{ left: `${stop * 100}%` }}
-                            >
-                              {formatMs(visualDurationMs * stop)}
-                            </span>
-                          ))}
+                        <div className="preview-visualizer-tools">
+                          <span className="preview-visualizer-hint">
+                            按住 Ctrl + 滚轮缩放，横向滚动查看细节。看鼓点峰值是否稳定贴近节拍线。
+                          </span>
+                          <span className="preview-visualizer-zoom">
+                            缩放 {waveformZoom.toFixed(1)}x
+                          </span>
                         </div>
 
-                        <div className="preview-visualizer-stage">
-                          <div className="preview-waveform">
-                            {waveformBars.map((height, index) => (
-                              <span
-                                key={`${selectedTrack.id}-wave-${index}`}
-                                className="preview-waveform-bar"
-                                style={{ '--wave-height': height } as CSSProperties}
-                              />
-                            ))}
-                          </div>
-
-                          {visualMinorBeatTimes.map((timeMs, index) => (
-                            <span
-                              key={`${selectedTrack.id}-minor-${index}-${timeMs}`}
-                              className="preview-grid-line preview-grid-line-minor"
-                              style={{ left: `${toPercent(timeMs, visualDurationMs)}%` }}
-                            />
-                          ))}
-
-                          {visualBarTimes.map((timeMs, index) => (
-                            <span
-                              key={`${selectedTrack.id}-bar-${index}-${timeMs}`}
-                              className="preview-grid-line preview-grid-line-bar"
-                              style={{ left: `${toPercent(timeMs, visualDurationMs)}%` }}
-                            />
-                          ))}
-
-                          {visualMetronomeMarkers.map((timeMs, index) => (
-                            <span
-                              key={`${selectedTrack.id}-metro-${index}-${timeMs}`}
-                              className="preview-metronome-dot"
-                              style={{ left: `${toPercent(timeMs, visualDurationMs)}%` }}
-                            />
-                          ))}
-
-                          <span
-                            className="preview-marker-line downbeat"
-                            style={{
-                              left: `${toPercent(selectedPlan.downbeatOffsetMsAfterSpeed, visualDurationMs)}%`
-                            }}
-                          />
-                          <span
-                            className="preview-marker-label downbeat"
-                            style={{
-                              left: `${toPercent(selectedPlan.downbeatOffsetMsAfterSpeed, visualDurationMs)}%`
-                            }}
+                        <div
+                          ref={waveformScrollRef}
+                          className="preview-visualizer-scroll"
+                          onWheel={handleWaveformWheel}
+                        >
+                          <div
+                            className="preview-visualizer-canvas"
+                            style={{ width: `${Math.max(100, waveformZoom * 100)}%` }}
                           >
-                            首拍
-                          </span>
+                            <div className="preview-visualizer-ruler" aria-hidden="true">
+                              {RULER_STOPS.map((stop) => (
+                                <span
+                                  key={stop}
+                                  className="preview-visualizer-ruler-label"
+                                  style={{ left: `${stop * 100}%` }}
+                                >
+                                  {formatMs(visualDurationMs * stop)}
+                                </span>
+                              ))}
+                            </div>
 
-                          <span
-                            className="preview-marker-line metronome"
-                            style={{ left: `${toPercent(selectedPlan.metronomeStartMs, visualDurationMs)}%` }}
-                          />
-                          <span
-                            className="preview-marker-label metronome"
-                            style={{ left: `${toPercent(selectedPlan.metronomeStartMs, visualDurationMs)}%` }}
-                          >
-                            节拍器
-                          </span>
+                            <div className="preview-visualizer-stage">
+                              <div className="preview-waveform">
+                                {waveformState.status === 'ready' && waveformAreaPath ? (
+                                  <svg
+                                    className="preview-waveform-svg"
+                                    viewBox={`0 0 ${WAVEFORM_VIEWBOX_WIDTH} ${WAVEFORM_VIEWBOX_HEIGHT}`}
+                                    preserveAspectRatio="none"
+                                    aria-label="真实音频波形"
+                                  >
+                                    <path className="preview-waveform-fill" d={waveformAreaPath} />
+                                    <path className="preview-waveform-stroke" d={waveformStrokePath} />
+                                    <line
+                                      className="preview-waveform-centerline"
+                                      x1="0"
+                                      x2={String(WAVEFORM_VIEWBOX_WIDTH)}
+                                      y1={String(WAVEFORM_CENTER_Y)}
+                                      y2={String(WAVEFORM_CENTER_Y)}
+                                    />
+                                  </svg>
+                                ) : waveformState.status === 'loading' ? (
+                                  <div className="preview-waveform-status">正在生成真实波形...</div>
+                                ) : waveformState.status === 'error' ? (
+                                  <div className="preview-waveform-status error">
+                                    波形加载失败：{waveformState.error}
+                                  </div>
+                                ) : (
+                                  <div className="preview-waveform-status">等待波形数据...</div>
+                                )}
+                              </div>
 
-                          {visualCursorMs !== null && (
-                            <>
+                              {visualMinorBeatTimes.map((timeMs, index) => (
+                                <span
+                                  key={`${selectedTrack.id}-minor-${index}-${timeMs}`}
+                                  className="preview-grid-line preview-grid-line-minor"
+                                  style={{ left: `${toPercent(timeMs, visualDurationMs)}%` }}
+                                />
+                              ))}
+
+                              {visualBarTimes.map((timeMs, index) => (
+                                <span
+                                  key={`${selectedTrack.id}-bar-${index}-${timeMs}`}
+                                  className="preview-grid-line preview-grid-line-bar"
+                                  style={{ left: `${toPercent(timeMs, visualDurationMs)}%` }}
+                                />
+                              ))}
+
+                              {visualMetronomeMarkers.map((timeMs, index) => (
+                                <span
+                                  key={`${selectedTrack.id}-metro-${index}-${timeMs}`}
+                                  className="preview-metronome-dot"
+                                  style={{ left: `${toPercent(timeMs, visualDurationMs)}%` }}
+                                />
+                              ))}
+
                               <span
-                                className="preview-marker-line playhead"
-                                style={{ left: `${toPercent(visualCursorMs, visualDurationMs)}%` }}
+                                className="preview-marker-line downbeat"
+                                style={{
+                                  left: `${toPercent(selectedPlan.downbeatOffsetMsAfterSpeed, visualDurationMs)}%`
+                                }}
                               />
                               <span
-                                className="preview-marker-label playhead"
-                                style={{ left: `${toPercent(visualCursorMs, visualDurationMs)}%` }}
+                                className="preview-marker-label downbeat"
+                                style={{
+                                  left: `${toPercent(selectedPlan.downbeatOffsetMsAfterSpeed, visualDurationMs)}%`
+                                }}
                               >
-                                播放头 {formatMs(visualCursorMs)}
+                                首拍
                               </span>
-                            </>
-                          )}
+
+                              <span
+                                className="preview-marker-line metronome"
+                                style={{ left: `${toPercent(selectedPlan.metronomeStartMs, visualDurationMs)}%` }}
+                              />
+                              <span
+                                className="preview-marker-label metronome"
+                                style={{ left: `${toPercent(selectedPlan.metronomeStartMs, visualDurationMs)}%` }}
+                              >
+                                节拍器
+                              </span>
+
+                              {visualCursorMs !== null && (
+                                <>
+                                  <span
+                                    className="preview-marker-line playhead"
+                                    style={{ left: `${toPercent(visualCursorMs, visualDurationMs)}%` }}
+                                  />
+                                  <span
+                                    className="preview-marker-label playhead"
+                                    style={{ left: `${toPercent(visualCursorMs, visualDurationMs)}%` }}
+                                  >
+                                    播放头 {formatMs(visualCursorMs)}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
                         </div>
 
                         <div className="preview-visualizer-legend">
                           <span className="preview-visualizer-legend-item">
                             <span className="preview-visualizer-legend-swatch waveform" />
-                            简化波形
+                            真实波形
                           </span>
                           <span className="preview-visualizer-legend-item">
                             <span className="preview-visualizer-legend-swatch bar" />

@@ -221,6 +221,11 @@ export interface TempoAnalysisResult {
   downbeatOffsetMs: number;
 }
 
+export interface AudioWaveformData {
+  peaks: number[];
+  durationMs: number;
+}
+
 export interface PreparedPlaybackAudio {
   mimeType: string;
   fileName: string;

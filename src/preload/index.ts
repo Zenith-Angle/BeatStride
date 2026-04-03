@@ -26,6 +26,8 @@ const api: BeatStrideApi = {
       analysisSeconds,
       beatsPerBar
     }),
+  getAudioWaveform: (payload) =>
+    ipcRenderer.invoke(IPC_CHANNELS.audioGetWaveform, payload),
   preparePlaybackAudio: (filePath) =>
     ipcRenderer.invoke(IPC_CHANNELS.audioPreparePlayback, filePath),
   prepareSinglePreviewAudio: (payload) =>

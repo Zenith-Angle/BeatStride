@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  AudioWaveformData,
   AudioProbeInfo,
   FfmpegBinaryConfig,
   GeneratedTrackProxy,
@@ -52,6 +53,13 @@ export interface BeatStrideApi {
     beatsPerBar?: number
   ): Promise<TempoAnalysisResult>;
   preparePlaybackAudio(filePath: string): Promise<PreparedPlaybackAudio>;
+  getAudioWaveform(payload: {
+    filePath: string;
+    durationMs: number;
+    trimInMs?: number;
+    trimOutMs?: number;
+    points?: number;
+  }): Promise<AudioWaveformData>;
   prepareSinglePreviewAudio(payload: {
     plan: SingleTrackExportPlan;
     mode: 'original' | 'processed' | 'metronome';

@@ -2602,9 +2602,42 @@ select {
   text-overflow: ellipsis;
 }
 
+.preview-visualizer-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.preview-visualizer-hint,
+.preview-visualizer-zoom {
+  color: var(--text-subtle);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.preview-visualizer-zoom {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.preview-visualizer-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 6px;
+  scrollbar-gutter: stable;
+}
+
+.preview-visualizer-canvas {
+  min-width: 100%;
+}
+
 .preview-visualizer-ruler {
   position: relative;
   height: 14px;
+  min-width: 100%;
+  margin-bottom: 8px;
 }
 
 .preview-visualizer-ruler-label {
@@ -2628,6 +2661,7 @@ select {
 .preview-visualizer-stage {
   position: relative;
   min-height: 142px;
+  min-width: 100%;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--line) 78%, var(--surface-paper));
   border-radius: 18px;
@@ -2648,10 +2682,50 @@ select {
 .preview-waveform {
   position: absolute;
   inset: 16px 12px 24px;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.preview-waveform-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.preview-waveform-fill {
+  fill: color-mix(in srgb, var(--waveform) 24%, transparent);
+}
+
+.preview-waveform-stroke {
+  fill: none;
+  stroke: color-mix(in srgb, var(--waveform-active) 76%, var(--waveform));
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.preview-waveform-centerline {
+  stroke: color-mix(in srgb, var(--line) 68%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 6 6;
+}
+
+.preview-waveform-status {
+  width: 100%;
+  height: 100%;
   display: grid;
-  grid-template-columns: repeat(72, minmax(0, 1fr));
-  align-items: center;
-  gap: 3px;
+  place-items: center;
+  padding: 12px;
+  color: var(--text-subtle);
+  font-size: 12px;
+  text-align: center;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-paper) 40%, transparent), transparent),
+    linear-gradient(90deg, color-mix(in srgb, var(--surface-water) 8%, transparent), transparent 55%);
+}
+
+.preview-waveform-status.error {
+  color: var(--danger);
 }
 
 .preview-waveform-bar {
@@ -2866,6 +2940,10 @@ select {
 
   .preview-visualizer-meta {
     justify-content: flex-start;
+  }
+
+  .preview-visualizer-tools {
+    align-items: flex-start;
   }
 }
 

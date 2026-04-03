@@ -17,6 +17,7 @@ import { detectFfmpegBinaries } from '@main/services/ffmpegBinaryService';
 import { probeAudioMetadata } from '@main/services/ffprobeService';
 import { detectTempo } from '@main/services/tempoDetectionService';
 import { preparePlaybackPayload } from '@main/services/playbackProxyService';
+import { getAudioWaveform } from '@main/services/waveformService';
 import {
   exportMedley,
   exportSingleTrack,
@@ -254,6 +255,23 @@ export function registerIpcHandlers(): void {
         payload.analysisSeconds,
         payload.beatsPerBar
       );
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.audioGetWaveform,
+    async (_, payload: {
+      filePath: string;
+      durationMs: number;
+      trimInMs?: number;
+      trimOutMs?: number;
+      points?: number;
+    }) => {
+      const settings = settingsService.load();
+      if (!settings.ffmpeg.available || !settings.ffmpeg.ffmpegPath) {
+        throw new Error('ffmpeg not available');
+      }
+      return getAudioWaveform(settings.ffmpeg.ffmpegPath, payload);
     }
   );
 
