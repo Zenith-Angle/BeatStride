@@ -22,6 +22,7 @@ import {
   Volume2,
   VolumeX
 } from 'lucide-react';
+import { generateBeatTimes } from '@shared/services/beatGridService';
 import type { ProjectFile, Track, TrackProxyStatus } from '@shared/types';
 import { buildProjectPreviewPlan, buildSingleTrackPreviewPlan } from '@shared/services/previewPlanService';
 import { getWorkspaceTracks } from '@shared/services/workspaceOrderService';
@@ -61,6 +62,56 @@ interface PreviewPanelProps {
   proxyGenerationButtonLabel: string;
   proxyGenerationButtonTitle: string;
   onRemoveCheckedFromQueue: () => void;
+}
+
+const WAVEFORM_BAR_COUNT = 72;
+const RULER_STOPS = [0, 0.25, 0.5, 0.75, 1];
+
+function clampToRange(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function hashString(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function buildWaveformBars(trackName: string, durationMs: number, beatIntervalMs: number): number[] {
+  const seed = hashString(`${trackName}:${Math.round(durationMs)}`);
+  const safeDurationMs = Math.max(1, durationMs);
+  const safeBeatIntervalMs = Math.max(240, beatIntervalMs);
+
+  return Array.from({ length: WAVEFORM_BAR_COUNT }, (_, index) => {
+    const ratio = WAVEFORM_BAR_COUNT <= 1 ? 0 : index / (WAVEFORM_BAR_COUNT - 1);
+    const timeMs = ratio * safeDurationMs;
+    const beatPhase = ((timeMs / safeBeatIntervalMs) + seed * 0.00037) % 1;
+    const beatPulse = 1 - Math.min(Math.abs(beatPhase), Math.abs(1 - beatPhase)) * 2;
+    const slowTexture = 0.5 + 0.5 * Math.sin(ratio * Math.PI * 4 + seed * 0.0019);
+    const fastTexture = 0.5 + 0.5 * Math.sin(ratio * Math.PI * 18 + seed * 0.0041);
+    const sectionLift = 0.5 + 0.5 * Math.sin(ratio * Math.PI * 2 - Math.PI / 3);
+    const centerLift = 1 - Math.abs(ratio - 0.5) * 0.55;
+    const amplitude = clampToRange(
+      0.16 +
+        beatPulse * 0.3 +
+        slowTexture * 0.2 +
+        fastTexture * 0.16 +
+        sectionLift * 0.14 +
+        centerLift * 0.12,
+      0.14,
+      0.96
+    );
+    return Number(amplitude.toFixed(3));
+  });
+}
+
+function toPercent(positionMs: number, durationMs: number): number {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return 0;
+  }
+  return clampToRange((positionMs / durationMs) * 100, 0, 100);
 }
 
 export function PreviewPanel({
@@ -177,30 +228,58 @@ export function PreviewPanel({
   const selectedTargetBpm = Math.round(
     selectedPlan?.targetBpm ?? selectedTrack?.targetBpm ?? project.globalTargetBpm
   );
-  const summaryTitle = !selectedTrack
+  const visualDurationMs = Math.max(1, selectedPlan?.processedDurationMs ?? 1);
+  const visualBeatIntervalMs = selectedPlan ? 60000 / Math.max(1, selectedPlan.targetBpm) : 0;
+  const waveformBars =
+    selectedTrack && selectedPlan
+      ? buildWaveformBars(selectedTrack.name, visualDurationMs, visualBeatIntervalMs)
+      : [];
+  const visualMusicBeatTimes = selectedPlan
+    ? generateBeatTimes(
+        visualDurationMs,
+        selectedPlan.targetBpm,
+        selectedPlan.downbeatOffsetMsAfterSpeed
+      )
+    : [];
+  const visualMetronomeBeatTimes = selectedPlan
+    ? generateBeatTimes(
+        visualDurationMs,
+        selectedPlan.metronomeBpm,
+        selectedPlan.metronomeStartMs
+      )
+    : [];
+  const barDivisor = Math.max(1, selectedPlan?.beatsPerBar ?? 4);
+  const visualBarTimes = visualMusicBeatTimes.filter((_, index) => index % barDivisor === 0);
+  const minorBeatStride = Math.max(1, Math.ceil(visualMusicBeatTimes.length / 96));
+  const visualMinorBeatTimes = visualMusicBeatTimes.filter(
+    (_, index) => index % barDivisor !== 0 && index % minorBeatStride === 0
+  );
+  const metronomeStride = Math.max(1, Math.ceil(visualMetronomeBeatTimes.length / 84));
+  const visualMetronomeMarkers = visualMetronomeBeatTimes.filter(
+    (_, index) => index % metronomeStride === 0
+  );
+  const visualCursorMs =
+    selectedPlan && target === 'single'
+      ? mode === 'original'
+        ? previewPositionMs / Math.max(0.0001, selectedPlan.speedRatio)
+        : previewPositionMs
+      : null;
+  const visualHeaderTitle = selectedTrack ? selectedTrack.name : '先从工作区选择一首歌';
+  const visualHeaderSubtitle = !selectedTrack
     ? target === 'medley' && queueTracks.length > 0
-      ? '先检查工作区顺序，再听串接是否自然'
-      : '先从工作区选择一首歌'
-    : mode === 'metronome'
-      ? '重点检查首拍与节拍器偏移'
+      ? '先在工作区点选一首歌，这里会显示它的简化波形、首拍线和节拍器落点。'
+      : '选中歌曲后，就能直接观察首拍和节拍器的相对位置，而不是只看数字。'
+    : target === 'medley'
+      ? '当前显示选中歌曲的处理时间轴，串烧试听不会改变这里的校准参考。'
       : mode === 'original'
-        ? '先用原曲确认节奏基准'
-        : '先确认变速听感，再进入导出';
-  const summarySubtitle = !selectedTrack
-    ? target === 'medley' && queueTracks.length > 0
-      ? `当前串烧按 ${Math.round(project.globalTargetBpm)} BPM 组织，确认顺序后再回右侧微调每首歌的首拍与节拍器偏移。`
-      : '这里最适合快速核对 BPM、首拍偏移和节拍器偏移，再决定是否导出。'
-    : mode === 'metronome'
-      ? `当前歌曲会从 ${Math.round(selectedTrack.sourceBpm)} BPM 对齐到 ${selectedTargetBpm} BPM。click 没贴住音乐时，优先微调右侧两个偏移。`
-      : mode === 'original'
-        ? '先确认切点和节奏基准，再切回变速或节拍器模式复查对齐。'
+        ? '当前播放是原曲对比，但下方仍按变速后的校准时间轴显示首拍与节拍器关系。'
         : selectedTrackProxyStatus === 'ready'
-          ? `当前歌曲会从 ${Math.round(selectedTrack.sourceBpm)} BPM 对齐到 ${selectedTargetBpm} BPM，听感稳定后可继续做串烧或导出前检查。`
-          : `当前歌曲会从 ${Math.round(selectedTrack.sourceBpm)} BPM 对齐到 ${selectedTargetBpm} BPM，确认无误后可先生成代理，后续串烧试听更稳定。`;
-  const summaryChips = selectedTrack
+          ? '这里按处理后的时间轴展示首拍、拍线和节拍器落点，适合直接判断是否贴拍。'
+          : '先在这里确认对齐关系，没问题后再生成代理或继续串烧试听。';
+  const visualMeta = selectedTrack
     ? [
-        currentTargetLabel,
-        `目标 ${selectedTargetBpm} BPM`,
+        currentModeLabel,
+        `${Math.round(selectedTrack.sourceBpm)} → ${selectedTargetBpm} BPM`,
         `首拍 ${selectedTrack.downbeatOffsetMs} ms`,
         `节拍器 ${selectedTrack.metronomeOffsetMs} ms`
       ]
@@ -213,6 +292,7 @@ export function PreviewPanel({
   const targetControls = [
     {
       key: 'single',
+      shortLabel: '单曲',
       label: '单曲试听',
       icon: Disc3,
       active: target === 'single',
@@ -221,6 +301,7 @@ export function PreviewPanel({
     },
     {
       key: 'medley',
+      shortLabel: '串烧',
       label: '串烧试听',
       icon: LayoutList,
       active: target === 'medley',
@@ -231,6 +312,7 @@ export function PreviewPanel({
   const modeControls = [
     {
       key: 'processed',
+      shortLabel: '变速',
       label: '变速试听',
       icon: Gauge,
       active: mode === 'processed',
@@ -239,6 +321,7 @@ export function PreviewPanel({
     },
     {
       key: 'metronome',
+      shortLabel: '节拍器',
       label: '添加节拍器',
       icon: AlarmClock,
       active: mode === 'metronome',
@@ -247,6 +330,7 @@ export function PreviewPanel({
     },
     {
       key: 'original',
+      shortLabel: '原曲',
       label: '原曲对比',
       icon: AudioWaveform,
       active: mode === 'original',
@@ -881,44 +965,52 @@ export function PreviewPanel({
         <div className="preview-audition-block">
           <div className="preview-function-strip">
             <div className="preview-icon-strip">
-              <div className="preview-icon-cluster" role="group" aria-label="试听目标">
-                {targetControls.map((control) => {
-                  const Icon = control.icon;
-                  return (
-                    <button
-                      key={control.key}
-                      type="button"
-                      className={`preview-toggle-btn ${control.active ? 'active' : ''}`}
-                      aria-label={control.label}
-                      aria-pressed={control.active}
-                      title={control.label}
-                      disabled={control.disabled}
-                      onClick={control.onClick}
-                    >
-                      <Icon size={20} strokeWidth={2.2} />
-                    </button>
-                  );
-                })}
+              <div className="preview-toggle-group">
+                <span className="preview-toggle-group-label">目标</span>
+                <div className="preview-icon-cluster" role="group" aria-label="试听目标">
+                  {targetControls.map((control) => {
+                    const Icon = control.icon;
+                    return (
+                      <button
+                        key={control.key}
+                        type="button"
+                        className={`preview-toggle-btn ${control.active ? 'active' : ''}`}
+                        aria-label={control.label}
+                        aria-pressed={control.active}
+                        title={control.label}
+                        disabled={control.disabled}
+                        onClick={control.onClick}
+                      >
+                        <Icon size={18} strokeWidth={2.2} />
+                        <span className="preview-toggle-label">{control.shortLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <span className="preview-icon-divider" aria-hidden="true" />
-              <div className="preview-icon-cluster" role="group" aria-label="试听模式">
-                {modeControls.map((control) => {
-                  const Icon = control.icon;
-                  return (
-                    <button
-                      key={control.key}
-                      type="button"
-                      className={`preview-toggle-btn ${control.active ? 'active' : ''}`}
-                      aria-label={control.label}
-                      aria-pressed={control.active}
-                      title={control.label}
-                      disabled={control.disabled}
-                      onClick={control.onClick}
-                    >
-                      <Icon size={20} strokeWidth={2.2} />
-                    </button>
-                  );
-                })}
+              <div className="preview-toggle-group">
+                <span className="preview-toggle-group-label">模式</span>
+                <div className="preview-icon-cluster" role="group" aria-label="试听模式">
+                  {modeControls.map((control) => {
+                    const Icon = control.icon;
+                    return (
+                      <button
+                        key={control.key}
+                        type="button"
+                        className={`preview-toggle-btn ${control.active ? 'active' : ''}`}
+                        aria-label={control.label}
+                        aria-pressed={control.active}
+                        title={control.label}
+                        disabled={control.disabled}
+                        onClick={control.onClick}
+                      >
+                        <Icon size={18} strokeWidth={2.2} />
+                        <span className="preview-toggle-label">{control.shortLabel}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
@@ -1014,22 +1106,145 @@ export function PreviewPanel({
               </div>
             </div>
           </div>
-          <div className="preview-summary">
-            <div className="preview-summary-card">
-              <div className="preview-summary-main">
-                <span className="preview-summary-kicker">试听建议</span>
-                <strong className="preview-summary-title" title={summaryTitle}>
-                  {summaryTitle}
-                </strong>
-                <span className="preview-summary-subtitle">{summarySubtitle}</span>
+          <div className="preview-visualizer">
+            <div className="preview-visualizer-card">
+              <div className="preview-visualizer-header">
+                <div className="preview-visualizer-heading">
+                  <span className="preview-visualizer-kicker">节拍校准视图</span>
+                  <strong className="preview-visualizer-title" title={visualHeaderTitle}>
+                    {visualHeaderTitle}
+                  </strong>
+                  <span className="preview-visualizer-subtitle">{visualHeaderSubtitle}</span>
+                </div>
+                <div className="preview-visualizer-meta">
+                  {visualMeta.map((item) => (
+                    <span key={item} className="preview-visualizer-chip">
+                      {item}
+                    </span>
+                  ))}
+                </div>
               </div>
-              <div className="preview-summary-stats">
-                {summaryChips.map((chip) => (
-                  <span key={chip} className="preview-summary-chip">
-                    {chip}
-                  </span>
-                ))}
-              </div>
+
+              {selectedTrack && selectedPlan ? (
+                <>
+                  <div className="preview-visualizer-ruler" aria-hidden="true">
+                    {RULER_STOPS.map((stop) => (
+                      <span
+                        key={stop}
+                        className="preview-visualizer-ruler-label"
+                        style={{ left: `${stop * 100}%` }}
+                      >
+                        {formatMs(visualDurationMs * stop)}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="preview-visualizer-stage">
+                    <div className="preview-waveform">
+                      {waveformBars.map((height, index) => (
+                        <span
+                          key={`${selectedTrack.id}-wave-${index}`}
+                          className="preview-waveform-bar"
+                          style={{ '--wave-height': height } as CSSProperties}
+                        />
+                      ))}
+                    </div>
+
+                    {visualMinorBeatTimes.map((timeMs, index) => (
+                      <span
+                        key={`${selectedTrack.id}-minor-${index}-${timeMs}`}
+                        className="preview-grid-line preview-grid-line-minor"
+                        style={{ left: `${toPercent(timeMs, visualDurationMs)}%` }}
+                      />
+                    ))}
+
+                    {visualBarTimes.map((timeMs, index) => (
+                      <span
+                        key={`${selectedTrack.id}-bar-${index}-${timeMs}`}
+                        className="preview-grid-line preview-grid-line-bar"
+                        style={{ left: `${toPercent(timeMs, visualDurationMs)}%` }}
+                      />
+                    ))}
+
+                    {visualMetronomeMarkers.map((timeMs, index) => (
+                      <span
+                        key={`${selectedTrack.id}-metro-${index}-${timeMs}`}
+                        className="preview-metronome-dot"
+                        style={{ left: `${toPercent(timeMs, visualDurationMs)}%` }}
+                      />
+                    ))}
+
+                    <span
+                      className="preview-marker-line downbeat"
+                      style={{
+                        left: `${toPercent(selectedPlan.downbeatOffsetMsAfterSpeed, visualDurationMs)}%`
+                      }}
+                    />
+                    <span
+                      className="preview-marker-label downbeat"
+                      style={{
+                        left: `${toPercent(selectedPlan.downbeatOffsetMsAfterSpeed, visualDurationMs)}%`
+                      }}
+                    >
+                      首拍
+                    </span>
+
+                    <span
+                      className="preview-marker-line metronome"
+                      style={{ left: `${toPercent(selectedPlan.metronomeStartMs, visualDurationMs)}%` }}
+                    />
+                    <span
+                      className="preview-marker-label metronome"
+                      style={{ left: `${toPercent(selectedPlan.metronomeStartMs, visualDurationMs)}%` }}
+                    >
+                      节拍器
+                    </span>
+
+                    {visualCursorMs !== null && (
+                      <>
+                        <span
+                          className="preview-marker-line playhead"
+                          style={{ left: `${toPercent(visualCursorMs, visualDurationMs)}%` }}
+                        />
+                        <span
+                          className="preview-marker-label playhead"
+                          style={{ left: `${toPercent(visualCursorMs, visualDurationMs)}%` }}
+                        >
+                          播放头 {formatMs(visualCursorMs)}
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="preview-visualizer-legend">
+                    <span className="preview-visualizer-legend-item">
+                      <span className="preview-visualizer-legend-swatch waveform" />
+                      简化波形
+                    </span>
+                    <span className="preview-visualizer-legend-item">
+                      <span className="preview-visualizer-legend-swatch bar" />
+                      小节线
+                    </span>
+                    <span className="preview-visualizer-legend-item">
+                      <span className="preview-visualizer-legend-swatch minor" />
+                      节拍线
+                    </span>
+                    <span className="preview-visualizer-legend-item">
+                      <span className="preview-visualizer-legend-swatch metronome" />
+                      节拍器落点
+                    </span>
+                    <span className="preview-visualizer-legend-item">
+                      <span className="preview-visualizer-legend-swatch playhead" />
+                      当前播放头
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="preview-visualizer-empty">
+                  <strong>选中一首歌后，这里会出现节拍对齐视图</strong>
+                  <span>你可以直接看首拍线和节拍器线是否贴近，再决定去右侧微调偏移。</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
