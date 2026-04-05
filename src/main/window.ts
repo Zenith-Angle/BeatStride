@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, shell } from 'electron';
 
 export function applyDeveloperTools(window: BrowserWindow, enabled: boolean): void {
   if (enabled) {
@@ -21,9 +21,13 @@ export function createMainWindow(options?: {
   const preloadMjsPath = path.join(__dirname, '../preload/index.mjs');
   const preloadJsPath = path.join(__dirname, '../preload/index.js');
   const preloadPath = fs.existsSync(preloadMjsPath) ? preloadMjsPath : preloadJsPath;
+  const appPath = app.getAppPath();
   const logoCandidates = [
-    path.join(process.cwd(), 'BS_COLOR.png'),
-    path.join(process.cwd(), 'build', 'icon.png')
+    path.join(process.cwd(), 'resources', 'logo', 'beatstride-color.png'),
+    path.join(process.cwd(), 'resources', 'icon.png'),
+    path.join(process.cwd(), 'build', 'icon.png'),
+    path.join(appPath, 'resources', 'logo', 'beatstride-color.png'),
+    path.join(appPath, 'resources', 'icon.png')
   ];
   const iconPath = logoCandidates.find((item) => fs.existsSync(item));
 
