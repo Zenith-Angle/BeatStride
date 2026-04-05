@@ -502,7 +502,7 @@ async function createMetronomeTrack(
     beatRenderMode: SingleTrackExportPlan['renderOptions']['beatRenderMode'];
     beatOriginalBpm: number;
     metronomeBpm: number;
-    beatsPerBar: number;
+    accentPattern: number[];
   },
   outputPath: string
 ): Promise<void> {
@@ -584,10 +584,10 @@ async function createMetronomeTrack(
   }
 
   const clickSec = options.beatRenderMode === 'crisp-click' ? 0.035 : 0.06;
-  const safeBeatsPerBar = Math.max(1, options.beatsPerBar);
+  const accentPattern = options.accentPattern.length > 0 ? options.accentPattern : [1.35, 1, 1, 1];
   const nodes = beatTimesMs.map((time, idx) => {
     const delay = Math.max(0, Math.round(time));
-    const accentGain = idx % safeBeatsPerBar === 0 ? 1.35 : 1;
+    const accentGain = accentPattern[idx % accentPattern.length] ?? 1;
     return `[0:a]atrim=0:${clickSec},asetpts=PTS-STARTPTS,volume=${accentGain},adelay=${delay}|${delay}[c${idx}]`;
   });
   const mixInputs = beatTimesMs.map((_, idx) => `[c${idx}]`).join('');
@@ -644,7 +644,7 @@ async function renderSingleToFile(
         beatRenderMode: resolvedPlan.renderOptions.beatRenderMode,
         beatOriginalBpm: resolvedPlan.renderOptions.beatOriginalBpm,
         metronomeBpm: resolvedPlan.track.metronomeBpm,
-        beatsPerBar: resolvedPlan.renderOptions.beatsPerBar
+        accentPattern: resolvedPlan.track.accentPattern
       },
       metronomePath
     );
@@ -716,7 +716,7 @@ async function renderMedleyToFile(
     }
 
     const inputFiles: string[] = [];
-    if (plan.crossfadeMs <= 0) {
+    if (!plan.clips.some((clip) => clip.transitionInMs > 0)) {
       let cursor = 0;
       for (let i = 0; i < renderedClips.length; i += 1) {
         const clip = renderedClips[i];

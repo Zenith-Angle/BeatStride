@@ -20,6 +20,11 @@ const track: Track = {
   speedRatio: 1.02272727,
   downbeatOffsetMs: 120,
   metronomeOffsetMs: 10,
+  beatsPerBar: 4,
+  timeSignature: '4/4',
+  analysisConfidence: 0.92,
+  meterConfidence: 0.88,
+  accentPattern: [1.35, 1, 1, 1],
   trackStartMs: 0,
   trimInMs: 1000,
   trimOutMs: 2000,
@@ -45,6 +50,7 @@ describe('buildSingleTrackExportPlan', () => {
     });
     expect(plan.track.processedDurationMs).toBeGreaterThan(0);
     expect(plan.track.beatTimesMs.length).toBeGreaterThan(0);
+    expect(plan.track.accentPattern).toEqual([1.35, 1, 1, 1]);
   });
 
   test('falls back to project target bpm when track target bpm is empty', () => {
@@ -131,6 +137,7 @@ describe('buildMedleyExportPlan', () => {
       mixTuning: project.mixTuning
     });
     expect(plan.clips).toHaveLength(1);
+    expect(plan.clips[0]?.transitionInMs).toBe(0);
   });
 
   test('combines tracks in workspace order', () => {
@@ -181,6 +188,63 @@ describe('buildMedleyExportPlan', () => {
 
     expect(plan.clips.map((clip) => clip.track.trackId)).toEqual(['t2', 't1']);
     expect(plan.clips.map((clip) => clip.track.trackName)).toEqual(['B.mp3', 'A.mp3']);
+  });
+
+  test('computes per-track transition length from outgoing track meter', () => {
+    const project: ProjectFile = {
+      version: 2,
+      meta: {
+        id: 'p3',
+        name: 'Project',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      globalTargetBpm: 180,
+      timeSignature: '4/4',
+      defaultMetronomeSamplePath: '',
+      theme: 'light',
+      language: 'zh-CN',
+      tracks: [
+        { ...track, id: 't1', beatsPerBar: 4, timeSignature: '4/4', inTimeline: true, exportEnabled: true },
+        {
+          ...track,
+          id: 't2',
+          name: 'six-eight.mp3',
+          beatsPerBar: 6,
+          timeSignature: '6/8',
+          accentPattern: [1.35, 1, 1, 1.15, 1, 1],
+          inTimeline: true,
+          exportEnabled: true
+        }
+      ],
+      exportPreset: {
+        mode: 'medley',
+        format: 'wav',
+        sampleRate: 48000,
+        bitrateKbps: 320,
+        outputDir: '',
+        fileSuffix: '',
+        normalizeLoudness: false,
+        gapMs: 0,
+        crossfadeMs: 0
+      },
+      mixTuning: {
+        ...DEFAULT_MIX_TUNING,
+        transitionBars: 2
+      }
+    };
+
+    const plan = buildMedleyExportPlan(project, {
+      globalTargetBpm: project.globalTargetBpm,
+      outputDir: 'C:/exports',
+      format: 'wav',
+      metronomeSamplePath: '',
+      normalizeLoudness: false,
+      gapMs: 0,
+      mixTuning: project.mixTuning
+    });
+
+    expect(plan.clips[1]?.transitionInMs).toBe(Math.round((60000 / 180) * 4 * 2));
   });
 });
 

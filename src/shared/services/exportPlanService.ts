@@ -9,9 +9,10 @@ import type {
   Track,
   TrackRenderPlan
 } from '../types';
-import { alignMetronomeToDownbeat } from './alignmentService';
+import { resolveTrackAlignment } from './alignmentService';
 import { generateBeatTimes } from './beatGridService';
 import { buildOutputFileName } from '../utils/fileName';
+import { normalizeAccentPattern } from './meterService';
 import { getWorkspaceTracks } from './workspaceOrderService';
 
 const DEFAULT_SUFFIX_RULES: ExportSuffixRules = {
@@ -20,11 +21,11 @@ const DEFAULT_SUFFIX_RULES: ExportSuffixRules = {
   customSuffix: ''
 };
 
-function computeTransitionMs(globalTargetBpm: number, mixTuning: MixTuningSettings): number {
-  const safeBpm = Math.max(1, globalTargetBpm);
-  const safeBeatsPerBar = Math.max(1, mixTuning.beatsPerBar);
+function computeTransitionMs(targetBpm: number, beatsPerBar: number, transitionBars: number): number {
+  const safeBpm = Math.max(1, targetBpm);
+  const safeBeatsPerBar = Math.max(1, beatsPerBar);
   const barMs = (60000 / safeBpm) * safeBeatsPerBar;
-  return Math.max(0, Math.round(mixTuning.transitionBars * barMs));
+  return Math.max(0, Math.round(transitionBars * barMs));
 }
 
 function buildTrackRenderPlan(
@@ -36,7 +37,7 @@ function buildTrackRenderPlan(
     0,
     track.durationMs - track.trimInMs - track.trimOutMs
   );
-  const alignment = alignMetronomeToDownbeat(track, {
+  const alignment = resolveTrackAlignment(track, {
     globalTargetBpm,
     harmonicTolerance: mixTuning.harmonicTolerance,
     harmonicMappingEnabled: mixTuning.harmonicMappingEnabled,
@@ -72,7 +73,8 @@ function buildTrackRenderPlan(
     downbeatOffsetMsAfterSpeed: alignment.downbeatOffsetMsAfterSpeed,
     metronomeStartMs: alignment.metronomeStartMs,
     beatTimesMs,
-    beatsPerBar: Math.max(1, mixTuning.beatsPerBar),
+    beatsPerBar: Math.max(1, track.beatsPerBar),
+    accentPattern: normalizeAccentPattern(track.accentPattern, track.beatsPerBar, track.timeSignature),
     harmonicMode: alignment.harmonicMode,
     trackStartMs: track.trackStartMs,
     trimInMs: track.trimInMs,
@@ -104,7 +106,6 @@ export function buildSingleTrackExportPlan(
       beatRenderMode: settings.mixTuning.beatRenderMode,
       stretchEngine: settings.mixTuning.stretchEngine,
       headroomDb: settings.mixTuning.headroomDb,
-      beatsPerBar: settings.mixTuning.beatsPerBar,
       targetLufs: settings.mixTuning.targetLufs,
       targetLra: settings.mixTuning.targetLra,
       targetTp: settings.mixTuning.targetTp
@@ -120,23 +121,28 @@ export function buildMedleyExportPlan(
   const clips: MedleyClipPlan[] = [];
   const enabledTracks = getWorkspaceTracks(project.tracks);
   const mixTuning = settings.mixTuning;
-  const crossfadeMs =
-    settings.crossfadeMs ?? computeTransitionMs(project.globalTargetBpm, mixTuning);
+  const fixedCrossfadeMs = settings.crossfadeMs;
   const gapMs = settings.gapMs ?? 0;
   let cursor = 0;
   let timelineMax = 0;
+  let nextTransitionInMs = 0;
 
   for (const track of enabledTracks) {
     const renderPlan = buildTrackRenderPlan(track, project.globalTargetBpm, mixTuning);
     const timelineStartMs = Math.max(cursor, track.trackStartMs);
     const timelineEndMs = timelineStartMs + renderPlan.processedDurationMs;
+    const transitionOutMs =
+      fixedCrossfadeMs ??
+      computeTransitionMs(renderPlan.targetBpm, renderPlan.beatsPerBar, mixTuning.transitionBars);
     clips.push({
       track: renderPlan,
       timelineStartMs,
-      timelineEndMs
+      timelineEndMs,
+      transitionInMs: nextTransitionInMs
     });
-    cursor = Math.max(0, timelineEndMs - crossfadeMs) + gapMs;
+    cursor = Math.max(0, timelineEndMs - transitionOutMs) + gapMs;
     timelineMax = Math.max(timelineMax, timelineEndMs);
+    nextTransitionInMs = transitionOutMs;
   }
 
   return {
@@ -146,7 +152,7 @@ export function buildMedleyExportPlan(
     format: settings.format,
     normalizeLoudness: settings.normalizeLoudness,
     gapMs,
-    crossfadeMs,
+    crossfadeMs: fixedCrossfadeMs ?? Math.max(0, ...clips.map((clip) => clip.transitionInMs)),
     transitionDuckDb: settings.transitionDuckDb ?? mixTuning.transitionDuckDb,
     metronomeSamplePath: settings.metronomeSamplePath,
     renderOptions: {
@@ -155,15 +161,11 @@ export function buildMedleyExportPlan(
       beatRenderMode: mixTuning.beatRenderMode,
       stretchEngine: mixTuning.stretchEngine,
       headroomDb: mixTuning.headroomDb,
-      beatsPerBar: mixTuning.beatsPerBar,
       targetLufs: mixTuning.targetLufs,
       targetLra: mixTuning.targetLra,
       targetTp: mixTuning.targetTp
     },
     clips,
-    durationMs:
-      clips.length === 0
-        ? 0
-        : Math.max(0, timelineMax - crossfadeMs * Math.max(0, clips.length - 1))
+    durationMs: clips.length === 0 ? 0 : Math.max(0, timelineMax)
   };
 }

@@ -130,8 +130,7 @@ export function buildMedleyMixFilter(
     };
   }
 
-  if (plan.crossfadeMs > 0) {
-    const fadeSec = msToSec(plan.crossfadeMs);
+  if (plan.clips.some((clip) => clip.transitionInMs > 0)) {
     const duckLinear =
       plan.transitionDuckDb > 0 ? dbToLinear(-Math.abs(plan.transitionDuckDb)) : 1;
     const filters: string[] = [];
@@ -152,7 +151,14 @@ export function buildMedleyMixFilter(
         filters.push(`${label}anull${current}`);
       } else {
         const next = idx === inputLabels.length - 1 ? '[mix]' : `[xf${idx}]`;
-        filters.push(`${current}${label}acrossfade=d=${fadeSec}:c1=tri:c2=tri${next}`);
+        const transitionMs = Math.max(0, plan.clips[idx]?.transitionInMs ?? 0);
+        if (transitionMs > 0) {
+          filters.push(
+            `${current}${label}acrossfade=d=${msToSec(transitionMs)}:c1=tri:c2=tri${next}`
+          );
+        } else {
+          filters.push(`${current}${label}concat=n=2:v=0:a=1${next}`);
+        }
         current = next;
       }
     });

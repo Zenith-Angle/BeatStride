@@ -1,6 +1,6 @@
 import type { Track } from '@shared/types';
 import { useI18n } from '@renderer/features/i18n/I18nProvider';
-import { alignMetronomeToDownbeat } from '@shared/services/alignmentService';
+import { resolveTrackAlignment } from '@shared/services/alignmentService';
 
 interface AlignmentPanelProps {
   track: Track;
@@ -18,7 +18,7 @@ export function AlignmentPanel({
   analyzingTempo = false
 }: AlignmentPanelProps) {
   const { t } = useI18n();
-  const aligned = alignMetronomeToDownbeat(track, {
+  const aligned = resolveTrackAlignment(track, {
     globalTargetBpm,
     harmonicMappingEnabled: true
   });
@@ -36,6 +36,9 @@ export function AlignmentPanel({
         <span>
           {Math.round(aligned.sourceBpm)} → {Math.round(aligned.effectiveSourceBpm)} →{' '}
           {Math.round(aligned.targetBpm)} BPM
+        </span>
+        <span>
+          拍号 {track.timeSignature} · 识别 {Math.round(track.analysisConfidence * 100)}%
         </span>
         <span>自动映射: {aligned.harmonicMode}</span>
       </div>
@@ -79,7 +82,7 @@ export function AlignmentPanel({
         </button>
       </div>
       <p className="muted alignment-result">
-        自动分析会优先更新 BPM 和首拍偏移；如果还有细小误差，再手动改上面两个偏移。
+        自动分析会更新 BPM、拍号和首拍偏移；如果还有细小误差，再手动改上面两个偏移。
       </p>
     </div>
   );

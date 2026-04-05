@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
-import type { TempoAnalysisResult } from '@shared/types';
+import type { TimeSignature, TrackAnalysisResult } from '@shared/types';
+import { getDefaultMeterMetadata } from '@shared/services/meterService';
 
 const SAMPLE_RATE = 22050;
 const CHANNELS = 1;
@@ -8,6 +9,7 @@ const HOP_SIZE = 512;
 const MIN_BPM = 70;
 const MAX_BPM = 210;
 const BPM_STEP = 0.5;
+const SUPPORTED_METERS: TimeSignature[] = ['3/4', '4/4', '6/8'];
 
 function frameIndexToMs(frameIndex: number): number {
   return Math.max(0, Math.round((frameIndex * HOP_SIZE * 1000) / SAMPLE_RATE));
@@ -104,7 +106,9 @@ function buildOnsetEnvelope(samples: Int16Array): number[] {
     return Math.max(0, value - previous);
   });
   const baseline = movingAverage(envelope, 12);
-  const normalized = envelope.map((value, index) => Math.max(0, value - (baseline[index] ?? 0) * 0.9));
+  const normalized = envelope.map((value, index) =>
+    Math.max(0, value - (baseline[index] ?? 0) * 0.9)
+  );
   const peak = Math.max(...normalized, 0);
   if (peak <= 0) {
     return normalized;
@@ -176,38 +180,6 @@ function estimateBeatFrames(envelope: number[], lagFrames: number): number[] {
   return frames;
 }
 
-function estimateDownbeatFrame(
-  beatFrames: number[],
-  envelope: number[],
-  beatsPerBar: number
-): number {
-  if (beatFrames.length === 0) {
-    return 0;
-  }
-
-  const safeBeatsPerBar = Math.max(1, Math.round(beatsPerBar));
-  if (beatFrames.length < safeBeatsPerBar) {
-    return beatFrames[0] ?? 0;
-  }
-
-  const beatStrengths = beatFrames.map((frame) => sampleEnvelopePeak(envelope, frame, 1).value);
-  let bestPhase = 0;
-  let bestScore = -1;
-
-  for (let phase = 0; phase < safeBeatsPerBar; phase += 1) {
-    let score = 0;
-    for (let index = phase; index < beatStrengths.length; index += safeBeatsPerBar) {
-      score += beatStrengths[index] ?? 0;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      bestPhase = phase;
-    }
-  }
-
-  return beatFrames[bestPhase] ?? beatFrames[0] ?? 0;
-}
-
 function scoreBpm(envelope: number[], lagFrames: number): number {
   if (lagFrames <= 0 || envelope.length <= lagFrames + 2) {
     return 0;
@@ -231,13 +203,193 @@ function scoreBpm(envelope: number[], lagFrames: number): number {
   return weightedHits > 0 ? score / weightedHits : score;
 }
 
+function scoreMeterCandidate(
+  beatFrames: number[],
+  envelope: number[],
+  signature: TimeSignature
+): {
+  score: number;
+  downbeatFrame: number;
+  accentPattern: number[];
+  beatsPerBar: number;
+  timeSignature: TimeSignature;
+  primaryAlternation: number;
+  secondaryLift: number;
+} {
+  const meter = getDefaultMeterMetadata(signature);
+  if (beatFrames.length === 0) {
+    return {
+      score: 0,
+      downbeatFrame: 0,
+      accentPattern: meter.accentPattern,
+      beatsPerBar: meter.beatsPerBar,
+      timeSignature: signature,
+      primaryAlternation: 0,
+      secondaryLift: 0
+    };
+  }
+
+  if (beatFrames.length < meter.beatsPerBar) {
+    return {
+      score: 0,
+      downbeatFrame: beatFrames[0] ?? 0,
+      accentPattern: meter.accentPattern,
+      beatsPerBar: meter.beatsPerBar,
+      timeSignature: signature,
+      primaryAlternation: 0,
+      secondaryLift: 0
+    };
+  }
+
+  const beatStrengths = beatFrames.map((frame) => sampleEnvelopePeak(envelope, frame, 1).value);
+  let bestPhase = 0;
+  let bestScore = -1;
+  const weightSum = meter.accentPattern.reduce((sum, value) => sum + value, 0);
+
+  for (let phase = 0; phase < meter.beatsPerBar; phase += 1) {
+    let weighted = 0;
+    let total = 0;
+    for (let index = 0; index < beatStrengths.length; index += 1) {
+      const strength = beatStrengths[index] ?? 0;
+      const relative = (index - phase + meter.beatsPerBar * 16) % meter.beatsPerBar;
+      const weight = meter.accentPattern[relative] ?? 1;
+      weighted += strength * weight;
+      total += strength;
+    }
+    const normalized = total > 0 ? weighted / (total * Math.max(weightSum / meter.beatsPerBar, 1)) : 0;
+    if (normalized > bestScore) {
+      bestScore = normalized;
+      bestPhase = phase;
+    }
+  }
+
+  const laneValues = Array.from({ length: meter.beatsPerBar }, () => new Array<number>());
+  for (let index = 0; index < beatStrengths.length; index += 1) {
+    const relative = (index - bestPhase + meter.beatsPerBar * 16) % meter.beatsPerBar;
+    laneValues[relative]?.push(beatStrengths[index] ?? 0);
+  }
+
+  const laneMeans = laneValues.map((values) => {
+    if (values.length === 0) {
+      return 0;
+    }
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+  });
+
+  const primaryValues = laneValues[0] ?? [];
+  let primaryAlternation = 0;
+  if (primaryValues.length >= 4) {
+    const evenValues = primaryValues.filter((_, index) => index % 2 === 0);
+    const oddValues = primaryValues.filter((_, index) => index % 2 === 1);
+    const evenMean =
+      evenValues.reduce((sum, value) => sum + value, 0) / Math.max(evenValues.length, 1);
+    const oddMean =
+      oddValues.reduce((sum, value) => sum + value, 0) / Math.max(oddValues.length, 1);
+    const overallMean =
+      primaryValues.reduce((sum, value) => sum + value, 0) / Math.max(primaryValues.length, 1);
+    primaryAlternation =
+      overallMean > 0 ? Math.abs(evenMean - oddMean) / overallMean : 0;
+  }
+
+  let secondaryLift = 0;
+  if (signature === '6/8') {
+    const secondaryMean = laneMeans[3] ?? 0;
+    const weakIndices = laneMeans
+      .map((value, index) => ({ value, index }))
+      .filter(({ index }) => index !== 0 && index !== 3)
+      .map(({ value }) => value);
+    const weakMean =
+      weakIndices.reduce((sum, value) => sum + value, 0) / Math.max(weakIndices.length, 1);
+    const primaryMean = laneMeans[0] ?? 0;
+    secondaryLift =
+      primaryMean > 0 ? Math.max(0, (secondaryMean - weakMean) / primaryMean) : 0;
+  }
+
+  return {
+    score: bestScore,
+    downbeatFrame: beatFrames[bestPhase] ?? beatFrames[0] ?? 0,
+    accentPattern: meter.accentPattern,
+    beatsPerBar: meter.beatsPerBar,
+    timeSignature: signature,
+    primaryAlternation: Number(primaryAlternation.toFixed(3)),
+    secondaryLift: Number(secondaryLift.toFixed(3))
+  };
+}
+
+function estimateMeterProfile(
+  beatFrames: number[],
+  envelope: number[]
+): Pick<
+  TrackAnalysisResult,
+  'beatsPerBar' | 'timeSignature' | 'meterConfidence' | 'accentPattern' | 'downbeatOffsetMs'
+> {
+  if (beatFrames.length === 0) {
+    const meter = getDefaultMeterMetadata();
+    return {
+      beatsPerBar: meter.beatsPerBar,
+      timeSignature: meter.timeSignature,
+      meterConfidence: 0,
+      accentPattern: meter.accentPattern,
+      downbeatOffsetMs: 0
+    };
+  }
+
+  const candidates = SUPPORTED_METERS.map((signature) =>
+    scoreMeterCandidate(beatFrames, envelope, signature)
+  ).sort((left, right) => right.score - left.score);
+
+  let bestIndex = 0;
+  const best = candidates[0];
+  const sixEightIndex = candidates.findIndex((candidate) => candidate.timeSignature === '6/8');
+  if (best?.timeSignature === '3/4' && sixEightIndex >= 0) {
+    const sixEight = candidates[sixEightIndex];
+    const scoreGap = best.score - sixEight.score;
+    if (
+      scoreGap <= 0.08 &&
+      best.primaryAlternation >= 0.12 &&
+      sixEight.secondaryLift >= 0.12
+    ) {
+      bestIndex = sixEightIndex;
+    }
+  }
+
+  const selected = candidates[bestIndex] ?? candidates[0];
+  const runnerUp = candidates.find((_, index) => index !== bestIndex);
+  const confidence = Number(
+    Math.max(
+      0,
+      Math.min(
+        1,
+        selected.score / Math.max(selected.score + (runnerUp?.score ?? 0), 1e-6)
+      )
+    ).toFixed(3)
+  );
+
+  return {
+    beatsPerBar: selected.beatsPerBar,
+    timeSignature: selected.timeSignature,
+    meterConfidence: confidence,
+    accentPattern: selected.accentPattern,
+    downbeatOffsetMs: frameIndexToMs(selected.downbeatFrame)
+  };
+}
+
 export function analyzeTempoFromSamples(
-  samples: Int16Array,
-  beatsPerBar = 4
-): TempoAnalysisResult {
+  samples: Int16Array
+): Omit<TrackAnalysisResult, 'filePath'> {
   const envelope = buildOnsetEnvelope(samples);
+  const fallbackMeter = getDefaultMeterMetadata();
   if (envelope.length < 32) {
-    return { bpm: 0, confidence: 0, firstBeatMs: 0, downbeatOffsetMs: 0 };
+    return {
+      bpm: 0,
+      firstBeatMs: 0,
+      downbeatOffsetMs: 0,
+      beatsPerBar: fallbackMeter.beatsPerBar,
+      timeSignature: fallbackMeter.timeSignature,
+      analysisConfidence: 0,
+      meterConfidence: 0,
+      accentPattern: fallbackMeter.accentPattern
+    };
   }
 
   let bestBpm = 0;
@@ -259,32 +411,45 @@ export function analyzeTempoFromSamples(
   }
 
   if (bestBpm <= 0 || bestLagFrames <= 0) {
-    return { bpm: 0, confidence: 0, firstBeatMs: 0, downbeatOffsetMs: 0 };
+    return {
+      bpm: 0,
+      firstBeatMs: 0,
+      downbeatOffsetMs: 0,
+      beatsPerBar: fallbackMeter.beatsPerBar,
+      timeSignature: fallbackMeter.timeSignature,
+      analysisConfidence: 0,
+      meterConfidence: 0,
+      accentPattern: fallbackMeter.accentPattern
+    };
   }
 
-  const confidence = Number(
-    Math.max(0, Math.min(1, bestScore / Math.max(bestScore + secondScore, 1e-6))).toFixed(3)
-  );
   const beatFrames = estimateBeatFrames(envelope, bestLagFrames);
   const firstBeatMs = frameIndexToMs(beatFrames[0] ?? 0);
-  const downbeatOffsetMs = frameIndexToMs(
-    estimateDownbeatFrame(beatFrames, envelope, beatsPerBar)
+  const meterProfile = estimateMeterProfile(beatFrames, envelope);
+  const analysisConfidence = Number(
+    Math.max(0, Math.min(1, bestScore / Math.max(bestScore + secondScore, 1e-6))).toFixed(3)
   );
 
   return {
     bpm: Number(bestBpm.toFixed(2)),
-    confidence,
     firstBeatMs,
-    downbeatOffsetMs
+    downbeatOffsetMs: meterProfile.downbeatOffsetMs,
+    beatsPerBar: meterProfile.beatsPerBar,
+    timeSignature: meterProfile.timeSignature,
+    analysisConfidence,
+    meterConfidence: meterProfile.meterConfidence,
+    accentPattern: meterProfile.accentPattern
   };
 }
 
 export async function detectTempo(
   ffmpegPath: string,
   filePath: string,
-  analysisSeconds: number,
-  beatsPerBar = 4
-): Promise<TempoAnalysisResult> {
+  analysisSeconds: number
+): Promise<TrackAnalysisResult> {
   const samples = await decodeAudioToMonoPcm(ffmpegPath, filePath, analysisSeconds);
-  return analyzeTempoFromSamples(samples, beatsPerBar);
+  return {
+    filePath,
+    ...analyzeTempoFromSamples(samples)
+  };
 }

@@ -2,9 +2,11 @@ import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import type {
+  MixTuningSettings,
   MedleyExportPlan,
   ProjectFile,
-  SingleTrackExportPlan
+  SingleTrackExportPlan,
+  TimeSignature
 } from '@shared/types';
 import { SUPPORTED_IMPORT_EXT } from '@shared/constants';
 import { IPC_CHANNELS } from './channels';
@@ -15,7 +17,7 @@ import {
 } from '@main/services/projectService';
 import { detectFfmpegBinaries } from '@main/services/ffmpegBinaryService';
 import { probeAudioMetadata } from '@main/services/ffprobeService';
-import { detectTempo } from '@main/services/tempoDetectionService';
+import { TrackAnalysisService } from '@main/services/trackAnalysisService';
 import { preparePlaybackPayload } from '@main/services/playbackProxyService';
 import { getAudioWaveform } from '@main/services/waveformService';
 import {
@@ -33,6 +35,7 @@ import { applyDeveloperTools } from '@main/window';
 const settingsService = new SettingsService();
 const projectService = new ProjectService();
 const exportQueue = new ExportQueueService();
+const trackAnalysisService = new TrackAnalysisService();
 
 export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.appGetSettings, async () => settingsService.load());
@@ -243,18 +246,34 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle(
-    IPC_CHANNELS.audioDetectTempo,
-    async (_, payload: { filePath: string; analysisSeconds: number; beatsPerBar?: number }) => {
+    IPC_CHANNELS.audioAnalyzeTracks,
+    async (_, payload: { tracks: Array<{ filePath: string }>; analysisSeconds: number }) => {
       const settings = settingsService.load();
-      if (!settings.ffmpeg.available || !settings.ffmpeg.ffmpegPath) {
-        throw new Error('ffmpeg not available');
+      return trackAnalysisService.analyzeTracks(payload, settings.ffmpeg.ffmpegPath);
+    }
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.audioSuggestTrackAlignments,
+    async (
+      _,
+      payload: {
+        tracks: Array<{
+          filePath: string;
+          bpm: number;
+          targetBpm?: number;
+          downbeatOffsetMs: number;
+          beatsPerBar: number;
+          timeSignature: TimeSignature;
+        }>;
+        globalTargetBpm: number;
+        mixTuning: Pick<
+          MixTuningSettings,
+          'harmonicTolerance' | 'harmonicMappingEnabled' | 'halfMapUpperBpm'
+        >;
       }
-      return detectTempo(
-        settings.ffmpeg.ffmpegPath,
-        payload.filePath,
-        payload.analysisSeconds,
-        payload.beatsPerBar
-      );
+    ) => {
+      return trackAnalysisService.suggestTrackAlignments(payload);
     }
   );
 

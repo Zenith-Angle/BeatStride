@@ -1,7 +1,7 @@
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type LanguageCode = 'zh-CN' | 'zh-TW' | 'en-US' | 'ja-JP' | 'fr-FR';
 export type ExportMode = 'single' | 'medley';
-export type TimeSignature = '4/4';
+export type TimeSignature = '3/4' | '4/4' | '6/8';
 export type ExportFormat = 'wav' | 'mp3';
 export type StretchEngine = 'auto' | 'rubberband' | 'atempo';
 export type ResolvedStretchEngine = 'rubberband' | 'atempo';
@@ -81,6 +81,31 @@ export interface TrackExportSettings {
   normalizeLoudness: boolean;
 }
 
+export interface TrackAlignmentSuggestion {
+  recommendedTargetBpm: number;
+  effectiveSourceBpm: number;
+  speedRatio: number;
+  harmonicMode: string;
+  downbeatOffsetMsAfterSpeed: number;
+  recommendedMetronomeStartMs: number;
+}
+
+export interface TrackAnalysisResult {
+  filePath: string;
+  bpm: number;
+  firstBeatMs: number;
+  downbeatOffsetMs: number;
+  beatsPerBar: number;
+  timeSignature: TimeSignature;
+  analysisConfidence: number;
+  meterConfidence: number;
+  accentPattern: number[];
+}
+
+export interface TrackAlignmentSuggestionResult extends TrackAlignmentSuggestion {
+  filePath: string;
+}
+
 export interface Track {
   id: string;
   name: string;
@@ -94,6 +119,12 @@ export interface Track {
   speedRatio: number;
   downbeatOffsetMs: number;
   metronomeOffsetMs: number;
+  beatsPerBar: number;
+  timeSignature: TimeSignature;
+  analysisConfidence: number;
+  meterConfidence: number;
+  accentPattern: number[];
+  alignmentSuggestion?: TrackAlignmentSuggestion;
   trackStartMs: number;
   trimInMs: number;
   trimOutMs: number;
@@ -151,6 +182,7 @@ export interface TrackRenderPlan {
   metronomeStartMs: number;
   beatTimesMs: number[];
   beatsPerBar: number;
+  accentPattern: number[];
   harmonicMode: string;
   trackStartMs: number;
   trimInMs: number;
@@ -178,6 +210,7 @@ export interface MedleyClipPlan {
   track: TrackRenderPlan;
   timelineStartMs: number;
   timelineEndMs: number;
+  transitionInMs: number;
 }
 
 export interface MedleyExportPlan {
@@ -281,7 +314,6 @@ export interface ProjectRenderOptions {
   stretchEngine: StretchEngine;
   resolvedStretchEngine?: ResolvedStretchEngine;
   headroomDb: number;
-  beatsPerBar: number;
   targetLufs: number;
   targetLra: number;
   targetTp: number;

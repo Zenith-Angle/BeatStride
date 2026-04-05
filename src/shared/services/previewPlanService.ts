@@ -33,7 +33,7 @@ export function buildProjectPreviewExportPlan(project: ProjectFile) {
     metronomeSamplePath: project.defaultMetronomeSamplePath,
     normalizeLoudness: false,
     gapMs: project.exportPreset.gapMs,
-    crossfadeMs: project.exportPreset.crossfadeMs,
+    crossfadeMs: project.exportPreset.crossfadeMs > 0 ? project.exportPreset.crossfadeMs : undefined,
     mixTuning: project.mixTuning
   });
 }

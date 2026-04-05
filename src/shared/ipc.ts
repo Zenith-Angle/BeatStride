@@ -5,11 +5,14 @@ import type {
   FfmpegBinaryConfig,
   GeneratedTrackProxy,
   MedleyExportPlan,
+  MixTuningSettings,
   PreparedPlaybackAudio,
   ProjectFile,
   SingleTrackExportPlan,
+  TrackAnalysisResult,
+  TrackAlignmentSuggestionResult,
   TrackProxyStatusResult,
-  TempoAnalysisResult
+  TimeSignature
 } from './types';
 
 export interface ExportProgressPayload {
@@ -47,11 +50,25 @@ export interface BeatStrideApi {
   saveRecovery(project: ProjectFile): Promise<boolean>;
   loadRecovery(): Promise<ProjectFile | null>;
   probeAudio(filePath: string): Promise<AudioProbeInfo>;
-  detectTempo(
-    filePath: string,
-    analysisSeconds: number,
-    beatsPerBar?: number
-  ): Promise<TempoAnalysisResult>;
+  analyzeTracks(payload: {
+    tracks: Array<{ filePath: string }>;
+    analysisSeconds: number;
+  }): Promise<TrackAnalysisResult[]>;
+  suggestTrackAlignments(payload: {
+    tracks: Array<{
+      filePath: string;
+      bpm: number;
+      targetBpm?: number;
+      downbeatOffsetMs: number;
+      beatsPerBar: number;
+      timeSignature: TimeSignature;
+    }>;
+    globalTargetBpm: number;
+    mixTuning: Pick<
+      MixTuningSettings,
+      'harmonicTolerance' | 'harmonicMappingEnabled' | 'halfMapUpperBpm'
+    >;
+  }): Promise<TrackAlignmentSuggestionResult[]>;
   preparePlaybackAudio(filePath: string): Promise<PreparedPlaybackAudio>;
   getAudioWaveform(payload: {
     filePath: string;

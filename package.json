@@ -9,13 +9,14 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:analyzer": "node ./scripts/build_python_analyzer.mjs",
     "preview": "electron-vite preview",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write .",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
-    "package": "npm run build && electron-builder"
+    "package": "npm run build:analyzer && npm run build && electron-builder"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -61,6 +62,10 @@
       {
         "from": "resources/ffmpeg",
         "to": "ffmpeg"
+      },
+      {
+        "from": "resources/python-analyzer",
+        "to": "python-analyzer"
       },
       {
         "from": "resources/metronome",

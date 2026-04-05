@@ -114,3 +114,38 @@ export function alignMetronomeToDownbeat(
       target.mode === 'global-target' ? harmonic.mode : `${target.mode} / ${harmonic.mode}`
   };
 }
+
+export function resolveTrackAlignment(
+  track: Pick<
+    Track,
+    | 'sourceBpm'
+    | 'targetBpm'
+    | 'detectedBpm'
+    | 'downbeatOffsetMs'
+    | 'metronomeOffsetMs'
+    | 'alignmentSuggestion'
+  >,
+  globalSettings: AlignmentSettings
+): AlignedMetronomeResult {
+  if (track.alignmentSuggestion) {
+    const sourceBpm = track.sourceBpm || track.detectedBpm || globalSettings.globalTargetBpm;
+    const recommendedTargetBpm = track.alignmentSuggestion.recommendedTargetBpm;
+    const speedRatio =
+      track.alignmentSuggestion.speedRatio > 0
+        ? track.alignmentSuggestion.speedRatio
+        : computeSpeedRatio(sourceBpm, recommendedTargetBpm);
+
+    return {
+      targetBpm: recommendedTargetBpm,
+      sourceBpm,
+      effectiveSourceBpm: track.alignmentSuggestion.effectiveSourceBpm,
+      speedRatio,
+      downbeatOffsetMsAfterSpeed: track.alignmentSuggestion.downbeatOffsetMsAfterSpeed,
+      metronomeStartMs:
+        track.alignmentSuggestion.recommendedMetronomeStartMs + track.metronomeOffsetMs,
+      harmonicMode: track.alignmentSuggestion.harmonicMode
+    };
+  }
+
+  return alignMetronomeToDownbeat(track, globalSettings);
+}

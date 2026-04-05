@@ -20,12 +20,9 @@ const api: BeatStrideApi = {
   saveRecovery: (project) => ipcRenderer.invoke(IPC_CHANNELS.projectSaveRecovery, project),
   loadRecovery: () => ipcRenderer.invoke(IPC_CHANNELS.projectLoadRecovery),
   probeAudio: (filePath) => ipcRenderer.invoke(IPC_CHANNELS.audioProbe, filePath),
-  detectTempo: (filePath, analysisSeconds, beatsPerBar) =>
-    ipcRenderer.invoke(IPC_CHANNELS.audioDetectTempo, {
-      filePath,
-      analysisSeconds,
-      beatsPerBar
-    }),
+  analyzeTracks: (payload) => ipcRenderer.invoke(IPC_CHANNELS.audioAnalyzeTracks, payload),
+  suggestTrackAlignments: (payload) =>
+    ipcRenderer.invoke(IPC_CHANNELS.audioSuggestTrackAlignments, payload),
   getAudioWaveform: (payload) =>
     ipcRenderer.invoke(IPC_CHANNELS.audioGetWaveform, payload),
   preparePlaybackAudio: (filePath) =>

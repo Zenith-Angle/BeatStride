@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { PreparedPlaybackAudio, ProjectFile, Track } from '@shared/types';
 import { MEDIA_PROTOCOL_SCHEME } from '@shared/constants';
+import { buildBeatAccentValues } from '@shared/services/meterService';
 import {
   buildProjectPreviewExportPlan,
   buildSingleTrackPreviewExportPlan,
@@ -24,7 +25,7 @@ interface PlaybackSegment {
   sourceEndSec?: number;
   playbackRate?: number;
   beatTimesMs?: number[];
-  beatAccents?: boolean[];
+  beatAccentValues?: number[];
   beatGainValues?: number[];
   beatsPerBar?: number;
   metronomeSamplePath?: string;
@@ -510,23 +511,21 @@ async function loadMetronomeBuffer(samplePath?: string): Promise<AudioBuffer | n
   return task;
 }
 
-function createAccentFlags(beatCount: number, beatsPerBar = 4): boolean[] {
-  return Array.from({ length: beatCount }, (_, index) =>
-    beatsPerBar > 0 ? index % beatsPerBar === 0 : false
-  );
+function createAccentValues(beatCount: number, accentPattern: number[] | undefined): number[] {
+  return buildBeatAccentValues(beatCount, accentPattern);
 }
 
 function scheduleFallbackClick(
   audioContext: AudioContext,
   when: number,
-  accented: boolean,
+  accentValue: number,
   gainLinear: number
 ): void {
   const osc = audioContext.createOscillator();
   const gain = audioContext.createGain();
   osc.type = 'square';
-  osc.frequency.value = accented ? 1900 : 1500;
-  gain.gain.value = gainLinear * (accented ? 0.18 : 0.12);
+  osc.frequency.value = accentValue >= 1.25 ? 1900 : accentValue >= 1.08 ? 1700 : 1500;
+  gain.gain.value = gainLinear * 0.12 * Math.max(0.75, Math.min(1.5, accentValue));
   osc.connect(gain);
   gain.connect(masterGainNode ?? audioContext.destination);
   osc.start(when);
@@ -538,7 +537,7 @@ function scheduleSampledClick(
   audioContext: AudioContext,
   buffer: AudioBuffer,
   when: number,
-  accented: boolean,
+  accentValue: number,
   playbackRate: number,
   gainLinear: number
 ): void {
@@ -546,7 +545,7 @@ function scheduleSampledClick(
   const gain = audioContext.createGain();
   source.buffer = buffer;
   source.playbackRate.value = Math.max(0.05, playbackRate);
-  gain.gain.value = gainLinear * (accented ? 1.2 : 0.92);
+  gain.gain.value = gainLinear * Math.max(0.82, Math.min(1.45, accentValue));
   source.connect(gain);
   gain.connect(masterGainNode ?? audioContext.destination);
   source.start(when);
@@ -565,10 +564,10 @@ function scheduleMetronome(
   void ensureAudioContext().then(async (audioContext) => {
     const sampleBuffer = await loadMetronomeBuffer(segment.metronomeSamplePath);
     const now = audioContext.currentTime + 0.02;
-    const accentFlags =
-      segment.beatAccents && segment.beatAccents.length === beatTimesMs.length
-        ? segment.beatAccents
-        : createAccentFlags(beatTimesMs.length, segment.beatsPerBar ?? 4);
+    const accentValues =
+      segment.beatAccentValues && segment.beatAccentValues.length === beatTimesMs.length
+        ? segment.beatAccentValues
+        : createAccentValues(beatTimesMs.length, undefined);
     const beatGainValues =
       segment.beatGainValues && segment.beatGainValues.length === beatTimesMs.length
         ? segment.beatGainValues
@@ -603,13 +602,13 @@ function scheduleMetronome(
         return;
       }
       const when = now + Math.max(0, relativeMs) / 1000;
-      const accented = accentFlags[index] ?? false;
+      const accentValue = accentValues[index] ?? 1;
       const gainLinear = beatGainValues[index] ?? 1;
       if (sampleBuffer) {
-        scheduleSampledClick(audioContext, sampleBuffer, when, accented, playbackRate, gainLinear);
+        scheduleSampledClick(audioContext, sampleBuffer, when, accentValue, playbackRate, gainLinear);
         return;
       }
-      scheduleFallbackClick(audioContext, when, accented, gainLinear);
+      scheduleFallbackClick(audioContext, when, accentValue, gainLinear);
     });
   });
 }
@@ -620,7 +619,7 @@ function createRenderedSegment(options: {
   sourceFilePath: string;
   trackId?: string | null;
   beatTimesMs?: number[];
-  beatAccents?: boolean[];
+  beatAccentValues?: number[];
   beatGainValues?: number[];
   beatsPerBar?: number;
   metronomeSamplePath?: string;
@@ -640,7 +639,7 @@ function createRenderedSegment(options: {
     sourceEndSec: options.previewDurationMs / 1000,
     playbackRate: 1,
     beatTimesMs: options.beatTimesMs ?? [],
-    beatAccents: options.beatAccents ?? [],
+    beatAccentValues: options.beatAccentValues ?? [],
     beatGainValues: options.beatGainValues ?? [],
     beatsPerBar: options.beatsPerBar ?? 4,
     metronomeSamplePath: options.metronomeSamplePath,
@@ -1007,9 +1006,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           previewDurationMs,
           sourceFilePath: playbackSourcePath,
           beatTimesMs: mode === 'metronome' ? trackPlan.beatTimesMs : [],
-          beatAccents:
+          beatAccentValues:
             mode === 'metronome'
-              ? createAccentFlags(trackPlan.beatTimesMs.length, trackPlan.beatsPerBar)
+              ? createAccentValues(trackPlan.beatTimesMs.length, trackPlan.accentPattern)
               : [],
           beatGainValues:
             mode === 'metronome'
@@ -1089,7 +1088,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       return;
     }
 
-    if (project.exportPreset.crossfadeMs > 0) {
+    if (medleyPlan.clips.some((clip) => clip.transitionInMs > 0)) {
       try {
         const previewPayloadTask = window.beatStride.prepareMedleyPreviewAudio({
           plan: medleyPlan,
@@ -1113,10 +1112,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
                 clip.track.beatTimesMs.map((beatMs) => clip.timelineStartMs + beatMs)
               )
             : [];
-        const medleyBeatAccents =
+        const medleyBeatAccentValues =
           mode === 'metronome'
             ? medleyPlan.clips.flatMap((clip) =>
-                createAccentFlags(clip.track.beatTimesMs.length, clip.track.beatsPerBar)
+                createAccentValues(clip.track.beatTimesMs.length, clip.track.accentPattern)
               )
             : [];
         const medleyBeatGainValues =
@@ -1133,9 +1132,9 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           previewDurationMs: medleyPlan.durationMs,
           sourceFilePath: playbackSourcePath,
           beatTimesMs: medleyBeatTimes,
-          beatAccents: medleyBeatAccents,
+          beatAccentValues: medleyBeatAccentValues,
           beatGainValues: medleyBeatGainValues,
-          beatsPerBar: project.mixTuning.beatsPerBar,
+          beatsPerBar: medleyPlan.clips[0]?.track.beatsPerBar ?? 4,
           metronomeSamplePath,
           beatRenderMode: project.mixTuning.beatRenderMode,
           beatOriginalBpm: project.mixTuning.beatOriginalBpm,
@@ -1203,7 +1202,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           label: string;
           previewPlan: ReturnType<typeof buildSingleTrackPreviewExportPlan>;
           beatTimesMs: number[];
-          beatAccents: boolean[];
+          beatAccentValues: number[];
           beatGainValues: number[];
           beatsPerBar: number;
           metronomeBpm: number;
@@ -1241,7 +1240,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         label: `${index + 1}. ${clip.track.trackName}`,
         previewPlan: buildSingleTrackPreviewExportPlan(sourceTrack, project),
         beatTimesMs: clip.track.beatTimesMs,
-        beatAccents: createAccentFlags(clip.track.beatTimesMs.length, clip.track.beatsPerBar),
+        beatAccentValues: createAccentValues(
+          clip.track.beatTimesMs.length,
+          clip.track.accentPattern
+        ),
         beatGainValues: Array.from({ length: clip.track.beatTimesMs.length }, () => beatGainLinear),
         beatsPerBar: clip.track.beatsPerBar,
         metronomeBpm: clip.track.metronomeBpm
@@ -1380,13 +1382,13 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         await runTrackSegment(
           createRenderedSegment({
             label: segment.label,
-            trackId: segment.trackId,
-            previewDurationMs: segment.durationMs,
-            sourceFilePath: playbackSourcePath,
-            beatTimesMs: mode === 'metronome' ? segment.beatTimesMs : [],
-            beatAccents: mode === 'metronome' ? segment.beatAccents : [],
-            beatGainValues: mode === 'metronome' ? segment.beatGainValues : [],
-            beatsPerBar: segment.beatsPerBar,
+              trackId: segment.trackId,
+              previewDurationMs: segment.durationMs,
+              sourceFilePath: playbackSourcePath,
+              beatTimesMs: mode === 'metronome' ? segment.beatTimesMs : [],
+              beatAccentValues: mode === 'metronome' ? segment.beatAccentValues : [],
+              beatGainValues: mode === 'metronome' ? segment.beatGainValues : [],
+              beatsPerBar: segment.beatsPerBar,
             metronomeSamplePath,
             beatRenderMode: project.mixTuning.beatRenderMode,
             beatOriginalBpm: project.mixTuning.beatOriginalBpm,

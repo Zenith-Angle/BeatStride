@@ -1,5 +1,12 @@
 import { create } from 'zustand';
-import type { AudioProbeInfo, ProjectFile, Track } from '@shared/types';
+import type {
+  AudioProbeInfo,
+  ProjectFile,
+  Track,
+  TrackAlignmentSuggestion,
+  TrackAlignmentSuggestionResult,
+  TrackAnalysisResult
+} from '@shared/types';
 import { AUTO_SAVE_INTERVAL_MS } from '@shared/constants';
 import { computeSpeedRatio } from '@shared/utils/tempo';
 import {
@@ -8,10 +15,17 @@ import {
 } from '@shared/services/workspaceOrderService';
 import {
   DEFAULT_EXPORT_PRESET,
+  DEFAULT_BEATS_PER_BAR,
   LEGACY_DEFAULT_METRONOME_SAMPLE_PATH,
   DEFAULT_METRONOME_SAMPLE_PATH,
-  DEFAULT_MIX_TUNING
+  DEFAULT_MIX_TUNING,
+  DEFAULT_TIME_SIGNATURE,
+  PROJECT_VERSION
 } from '@shared/constants';
+import {
+  getDefaultMeterMetadata,
+  normalizeAccentPattern
+} from '@shared/services/meterService';
 
 interface ProjectState {
   project: ProjectFile | null;
@@ -32,13 +46,14 @@ interface ProjectState {
     items: Array<{
       filePath: string;
       probe: AudioProbeInfo;
-      detectedBpm?: number;
-      downbeatOffsetMs?: number;
+      analysis?: TrackAnalysisResult;
+      alignmentSuggestion?: TrackAlignmentSuggestionResult;
     }>
   ) => void;
   addTracksFromFolder: () => Promise<void>;
   patchProject: (patch: Partial<ProjectFile>) => void;
   updateTrack: (trackId: string, patch: Partial<Track>) => void;
+  refreshTrackAlignmentSuggestions: () => Promise<void>;
   removeCheckedTracks: () => void;
   removeTracksByIds: (trackIds: string[]) => void;
   toggleLibraryCheck: (trackId: string) => void;
@@ -64,6 +79,73 @@ function cloneProject(project: ProjectFile): ProjectFile {
   return structuredClone(project);
 }
 
+function toTrackAlignmentSuggestion(
+  suggestion?: TrackAlignmentSuggestionResult
+): TrackAlignmentSuggestion | undefined {
+  if (!suggestion) {
+    return undefined;
+  }
+  return {
+    recommendedTargetBpm: suggestion.recommendedTargetBpm,
+    effectiveSourceBpm: suggestion.effectiveSourceBpm,
+    speedRatio: suggestion.speedRatio,
+    harmonicMode: suggestion.harmonicMode,
+    downbeatOffsetMsAfterSpeed: suggestion.downbeatOffsetMsAfterSpeed,
+    recommendedMetronomeStartMs: suggestion.recommendedMetronomeStartMs
+  };
+}
+
+function areAlignmentSuggestionsEqual(
+  left?: TrackAlignmentSuggestion,
+  right?: TrackAlignmentSuggestion
+): boolean {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    left.recommendedTargetBpm === right.recommendedTargetBpm &&
+    left.effectiveSourceBpm === right.effectiveSourceBpm &&
+    left.speedRatio === right.speedRatio &&
+    left.harmonicMode === right.harmonicMode &&
+    left.downbeatOffsetMsAfterSpeed === right.downbeatOffsetMsAfterSpeed &&
+    left.recommendedMetronomeStartMs === right.recommendedMetronomeStartMs
+  );
+}
+
+function normalizeTrackMeter(
+  track: Track,
+  legacyBeatsPerBar?: number,
+  legacyTimeSignature?: string
+): Track {
+  const fallbackMeter = getDefaultMeterMetadata(
+    track.timeSignature ?? legacyTimeSignature ?? DEFAULT_TIME_SIGNATURE,
+    track.beatsPerBar || legacyBeatsPerBar || DEFAULT_BEATS_PER_BAR
+  );
+  return {
+    ...track,
+    beatsPerBar: track.beatsPerBar || fallbackMeter.beatsPerBar,
+    timeSignature: track.timeSignature ?? fallbackMeter.timeSignature,
+    analysisConfidence:
+      Number.isFinite(track.analysisConfidence) && track.analysisConfidence >= 0
+        ? track.analysisConfidence
+        : track.detectedBpm
+          ? 0.5
+          : 0,
+    meterConfidence:
+      Number.isFinite(track.meterConfidence) && track.meterConfidence >= 0
+        ? track.meterConfidence
+        : 0,
+    accentPattern: normalizeAccentPattern(
+      track.accentPattern,
+      track.beatsPerBar || fallbackMeter.beatsPerBar,
+      track.timeSignature ?? fallbackMeter.timeSignature
+    )
+  };
+}
+
 function normalizeProject(project: ProjectFile): ProjectFile {
   const defaultMetronomeSamplePath =
     !project.defaultMetronomeSamplePath ||
@@ -76,6 +158,8 @@ function normalizeProject(project: ProjectFile): ProjectFile {
     loudnormEnabled:
       project.mixTuning?.loudnormEnabled ?? project.exportPreset?.normalizeLoudness ?? true
   };
+  const legacyBeatsPerBar = project.mixTuning?.beatsPerBar ?? DEFAULT_BEATS_PER_BAR;
+  const legacyTimeSignature = project.timeSignature ?? DEFAULT_TIME_SIGNATURE;
   if (
     defaultMetronomeSamplePath === DEFAULT_METRONOME_SAMPLE_PATH &&
     mixTuning.beatRenderMode === 'crisp-click'
@@ -85,6 +169,8 @@ function normalizeProject(project: ProjectFile): ProjectFile {
 
   return {
     ...project,
+    version: PROJECT_VERSION,
+    timeSignature: legacyTimeSignature,
     defaultMetronomeSamplePath,
     exportPreset: {
       ...DEFAULT_EXPORT_PRESET,
@@ -92,7 +178,7 @@ function normalizeProject(project: ProjectFile): ProjectFile {
     },
     mixTuning,
     tracks: project.tracks.map((track) => ({
-      ...track,
+      ...normalizeTrackMeter(track, legacyBeatsPerBar, legacyTimeSignature),
       inTimeline: Boolean(track.inTimeline || track.exportEnabled),
       exportEnabled: Boolean(track.exportEnabled)
     }))
@@ -215,6 +301,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const prev = cloneProject(state.project);
     const tracks: Track[] = items.map((item, index) => {
       const baseName = item.filePath.split(/[\\/]/).pop() ?? `Track_${index}`;
+      const analysis = item.analysis;
+      const meter = getDefaultMeterMetadata(analysis?.timeSignature, analysis?.beatsPerBar);
       const sourceBpm = state.project?.globalTargetBpm ?? 180;
       return {
         id: crypto.randomUUID(),
@@ -223,12 +311,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         durationMs: item.probe.durationMs,
         sampleRate: item.probe.sampleRate,
         channels: item.probe.channels,
-        detectedBpm: item.detectedBpm,
-        sourceBpm: item.detectedBpm || sourceBpm,
+        detectedBpm: analysis?.bpm,
+        sourceBpm: analysis?.bpm || sourceBpm,
         targetBpm: undefined,
-        speedRatio: computeSpeedRatio(item.detectedBpm || sourceBpm, sourceBpm),
-        downbeatOffsetMs: item.downbeatOffsetMs ?? 0,
+        speedRatio: computeSpeedRatio(analysis?.bpm || sourceBpm, sourceBpm),
+        downbeatOffsetMs: analysis?.downbeatOffsetMs ?? 0,
         metronomeOffsetMs: 0,
+        beatsPerBar: meter.beatsPerBar,
+        timeSignature: meter.timeSignature,
+        analysisConfidence: analysis?.analysisConfidence ?? 0,
+        meterConfidence: analysis?.meterConfidence ?? 0,
+        accentPattern: normalizeAccentPattern(
+          analysis?.accentPattern,
+          meter.beatsPerBar,
+          meter.timeSignature
+        ),
+        alignmentSuggestion: toTrackAlignmentSuggestion(item.alignmentSuggestion),
         trackStartMs: 0,
         trimInMs: 0,
         trimOutMs: 0,
@@ -322,6 +420,70 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       undoStack: [...state.undoStack, prev].slice(-50),
       redoStack: [],
       dirty: true
+    });
+  },
+  refreshTrackAlignmentSuggestions: async () => {
+    const state = get();
+    const project = state.project;
+    if (!project || project.tracks.length === 0) {
+      return;
+    }
+
+    const results = await window.beatStride.suggestTrackAlignments({
+      tracks: project.tracks.map((track) => ({
+        filePath: track.filePath,
+        bpm: track.detectedBpm ?? track.sourceBpm,
+        targetBpm: track.targetBpm,
+        downbeatOffsetMs: track.downbeatOffsetMs,
+        beatsPerBar: track.beatsPerBar,
+        timeSignature: track.timeSignature
+      })),
+      globalTargetBpm: project.globalTargetBpm,
+      mixTuning: project.mixTuning
+    });
+
+    if (results.length === 0) {
+      return;
+    }
+
+    const resultByPath = new Map(results.map((item) => [item.filePath, item] as const));
+    set((current) => {
+      if (!current.project) {
+        return {};
+      }
+
+      let changed = false;
+      const nextTracks = current.project.tracks.map((track) => {
+        const result = resultByPath.get(track.filePath);
+        if (!result) {
+          return track;
+        }
+        const nextSuggestion = toTrackAlignmentSuggestion(result);
+        if (areAlignmentSuggestionsEqual(track.alignmentSuggestion, nextSuggestion)) {
+          return track;
+        }
+        changed = true;
+        return {
+          ...track,
+          alignmentSuggestion: nextSuggestion
+        };
+      });
+
+      if (!changed) {
+        return {};
+      }
+
+      return {
+        project: {
+          ...current.project,
+          tracks: nextTracks,
+          meta: {
+            ...current.project.meta,
+            updatedAt: new Date().toISOString()
+          }
+        },
+        dirty: true
+      };
     });
   },
   removeCheckedTracks: () => {

@@ -2,11 +2,15 @@ node_modules
 dist
 out
 coverage
+build
 .DS_Store
+__pycache__/
 *.log
 *.tmp
 *.temp
 *.tsbuildinfo
+*.spec
 ffmpeg/*.exe
 ffmpeg/bin/*.exe
 resources/ffmpeg/*.exe
+resources/python-analyzer/*.exe

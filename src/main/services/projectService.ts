@@ -136,6 +136,7 @@ export class ProjectService {
   writeProject(filePath: string, project: ProjectFile): ProjectFile {
     const next: ProjectFile = {
       ...project,
+      version: PROJECT_VERSION,
       meta: {
         ...project.meta,
         filePath,

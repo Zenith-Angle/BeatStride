@@ -8,7 +8,7 @@ import type {
 
 export const APP_NAME = 'BeatStride';
 export const PROJECT_FILE_EXT = '.runbeat-project.json';
-export const PROJECT_VERSION = 1;
+export const PROJECT_VERSION = 2;
 export const PROJECT_PROXY_DIRNAME = 'beatstride-proxies';
 export const MEDIA_PROTOCOL_SCHEME = 'beatstride-media';
 export const LEGACY_DEFAULT_METRONOME_SAMPLE_PATH =
@@ -72,6 +72,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 export const DEFAULT_TIME_SIGNATURE = '4/4' as const;
+export const DEFAULT_BEATS_PER_BAR = 4;
+export const DEFAULT_ACCENT_PATTERN = [1.35, 1, 1, 1];
 
 export const AUTO_SAVE_INTERVAL_MS = 4000;
 export const WORKSPACE_TRACK_DRAG_MIME = 'application/x-beatstride-work-track';

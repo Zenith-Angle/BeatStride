@@ -109,7 +109,7 @@ export const useExportStore = create<ExportState>((set) => ({
         metronomeSamplePath: project.defaultMetronomeSamplePath,
         normalizeLoudness: project.mixTuning.loudnormEnabled,
         gapMs: project.exportPreset.gapMs,
-        crossfadeMs: project.exportPreset.crossfadeMs,
+        crossfadeMs: project.exportPreset.crossfadeMs > 0 ? project.exportPreset.crossfadeMs : undefined,
         mixTuning: project.mixTuning,
         transitionDuckDb: project.mixTuning.transitionDuckDb
       });

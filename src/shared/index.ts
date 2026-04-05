@@ -9,3 +9,4 @@ export * from './services/exportPlanService';
 export * from './services/previewPlanService';
 export * from './services/ffmpegArgsBuilder';
 export * from './services/metronomeService';
+export * from './services/meterService';

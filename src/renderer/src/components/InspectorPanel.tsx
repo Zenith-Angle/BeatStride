@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { ProjectFile, Track } from '@shared/types';
 import { useI18n } from '@renderer/features/i18n/I18nProvider';
 import { AlignmentPanel } from '@renderer/features/alignment/AlignmentPanel';
-import { alignMetronomeToDownbeat } from '@shared/services/alignmentService';
+import { resolveTrackAlignment } from '@shared/services/alignmentService';
 
 interface InspectorPanelProps {
   project: ProjectFile;
@@ -36,7 +36,7 @@ export function InspectorPanel({
   const [resizing, setResizing] = useState(false);
   const [analyzingTempo, setAnalyzingTempo] = useState(false);
   const trackAlignment = track
-    ? alignMetronomeToDownbeat(track, {
+    ? resolveTrackAlignment(track, {
         globalTargetBpm: project.globalTargetBpm,
         harmonicTolerance: project.mixTuning.harmonicTolerance,
         harmonicMappingEnabled: project.mixTuning.harmonicMappingEnabled,
@@ -62,16 +62,48 @@ export function InspectorPanel({
     }
     setAnalyzingTempo(true);
     try {
-      const result = await window.beatStride.detectTempo(
-        track.filePath,
-        project.mixTuning.analysisSeconds,
-        project.mixTuning.beatsPerBar
-      );
-      if (result.bpm > 0) {
+      const [analysis] = await window.beatStride.analyzeTracks({
+        tracks: [{ filePath: track.filePath }],
+        analysisSeconds: project.mixTuning.analysisSeconds
+      });
+      if (analysis && analysis.bpm > 0) {
+        const [suggestion] = await window.beatStride.suggestTrackAlignments({
+          tracks: [
+            {
+              filePath: track.filePath,
+              bpm: analysis.bpm,
+              targetBpm: track.targetBpm,
+              downbeatOffsetMs: analysis.downbeatOffsetMs,
+              beatsPerBar: analysis.beatsPerBar,
+              timeSignature: analysis.timeSignature
+            }
+          ],
+          globalTargetBpm: project.globalTargetBpm,
+          mixTuning: {
+            harmonicTolerance: project.mixTuning.harmonicTolerance,
+            harmonicMappingEnabled: project.mixTuning.harmonicMappingEnabled,
+            halfMapUpperBpm: project.mixTuning.halfMapUpperBpm
+          }
+        });
         onUpdateTrack(track.id, {
-          detectedBpm: result.bpm,
-          sourceBpm: result.bpm,
-          downbeatOffsetMs: result.downbeatOffsetMs
+          detectedBpm: analysis.bpm,
+          sourceBpm: analysis.bpm,
+          downbeatOffsetMs: analysis.downbeatOffsetMs,
+          beatsPerBar: analysis.beatsPerBar,
+          timeSignature: analysis.timeSignature,
+          analysisConfidence: analysis.analysisConfidence,
+          meterConfidence: analysis.meterConfidence,
+          accentPattern: analysis.accentPattern,
+          alignmentSuggestion: suggestion
+            ? {
+                recommendedTargetBpm: suggestion.recommendedTargetBpm,
+                effectiveSourceBpm: suggestion.effectiveSourceBpm,
+                speedRatio: suggestion.speedRatio,
+                harmonicMode: suggestion.harmonicMode,
+                downbeatOffsetMsAfterSpeed: suggestion.downbeatOffsetMsAfterSpeed,
+                recommendedMetronomeStartMs: suggestion.recommendedMetronomeStartMs
+              }
+            : undefined
         });
       }
     } finally {
@@ -128,17 +160,6 @@ export function InspectorPanel({
                 }
               />
             </label>
-            <label className="field inline">
-              <span>每小节拍数</span>
-              <input
-                type="number"
-                min={1}
-                value={project.mixTuning.beatsPerBar}
-                onChange={(event) =>
-                  updateMixTuning('beatsPerBar', Math.max(1, Number(event.target.value) || 4))
-                }
-              />
-            </label>
             <label className="field">
               <span>默认节拍器音色</span>
               <input
@@ -148,10 +169,6 @@ export function InspectorPanel({
                 }
               />
             </label>
-            <label className="field inline">
-              <span>默认拍号</span>
-              <input value={project.timeSignature} disabled />
-            </label>
             {track && trackAlignment ? (
               <div className="inspector-summary-card">
                 <strong>{track.name}</strong>
@@ -159,13 +176,17 @@ export function InspectorPanel({
                   {Math.round(trackAlignment.sourceBpm)} → {Math.round(trackAlignment.effectiveSourceBpm)} →{' '}
                   {Math.round(trackAlignment.targetBpm)} BPM
                 </span>
+                <span>
+                  拍号: {track.timeSignature} · 识别 {Math.round(track.analysisConfidence * 100)}% · 拍号{' '}
+                  {Math.round(track.meterConfidence * 100)}%
+                </span>
                 <span>映射模式: {trackAlignment.harmonicMode}</span>
               </div>
             ) : (
               <p className="muted inspector-summary-card">选中工作区歌曲后，这里会显示实际映射结果。</p>
             )}
             <p className="muted inspector-note">
-              自动分析会优先估计 BPM 和首拍位置；下半区域只保留少量保底微调。
+              拍号和强拍会按单曲识别并保存；下半区域只保留首拍与节拍器偏移的保底微调。
             </p>
           </div>
         </div>

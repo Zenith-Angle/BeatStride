@@ -111,7 +111,6 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
     }
     const currentProject = useProjectStore.getState().project;
     const analysisSeconds = currentProject?.mixTuning.analysisSeconds ?? 120;
-    const beatsPerBar = currentProject?.mixTuning.beatsPerBar ?? 4;
 
     setImporting(true);
     try {
@@ -124,29 +123,55 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
         Math.min(MAX_IMPORT_CONCURRENCY, Math.ceil(hardwareConcurrency / 2))
       );
 
-      const probed = await mapWithConcurrency(
+      const probeResults = await mapWithConcurrency(
         paths,
         importConcurrency,
-        async (filePath) => {
-          const [probe, tempo] = await Promise.all([
-            window.beatStride.probeAudio(filePath),
-            window.beatStride.detectTempo(filePath, analysisSeconds, beatsPerBar).catch(() => ({
-              bpm: 0,
-              confidence: 0,
-              firstBeatMs: 0,
-              downbeatOffsetMs: 0
-            }))
-          ]);
-
-          return {
-            filePath,
-            probe,
-            detectedBpm: tempo.bpm > 0 ? tempo.bpm : undefined,
-            downbeatOffsetMs: tempo.downbeatOffsetMs > 0 ? tempo.downbeatOffsetMs : 0
-          };
-        }
+        async (filePath) => ({
+          filePath,
+          probe: await window.beatStride.probeAudio(filePath)
+        })
       );
-      projectStore.addTracksFromFiles(probed);
+
+      const analysisResults = await window.beatStride
+        .analyzeTracks({
+          tracks: paths.map((filePath) => ({ filePath })),
+          analysisSeconds
+        })
+        .catch(() => []);
+      const analysisByPath = new Map(analysisResults.map((item) => [item.filePath, item] as const));
+
+      const alignmentResults =
+        analysisResults.length > 0
+          ? await window.beatStride
+              .suggestTrackAlignments({
+                tracks: analysisResults.map((item) => ({
+                  filePath: item.filePath,
+                  bpm: item.bpm,
+                  downbeatOffsetMs: item.downbeatOffsetMs,
+                  beatsPerBar: item.beatsPerBar,
+                  timeSignature: item.timeSignature
+                })),
+                globalTargetBpm: currentProject?.globalTargetBpm ?? 180,
+                mixTuning: {
+                  harmonicTolerance: currentProject?.mixTuning.harmonicTolerance ?? 0.12,
+                  harmonicMappingEnabled:
+                    currentProject?.mixTuning.harmonicMappingEnabled ?? true,
+                  halfMapUpperBpm: currentProject?.mixTuning.halfMapUpperBpm ?? 110
+                }
+              })
+              .catch(() => [])
+          : [];
+      const alignmentByPath = new Map(
+        alignmentResults.map((item) => [item.filePath, item] as const)
+      );
+
+      projectStore.addTracksFromFiles(
+        probeResults.map((item) => ({
+          ...item,
+          analysis: analysisByPath.get(item.filePath),
+          alignmentSuggestion: alignmentByPath.get(item.filePath)
+        }))
+      );
     } finally {
       setImporting(false);
     }
@@ -448,9 +473,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
     }
 
     const medleyPlan = buildProjectPreviewExportPlan(project);
-    const medleyPreviewDurationMs =
-      medleyPlan.clips.reduce((sum, clip) => sum + clip.track.processedDurationMs, 0) +
-      Math.max(0, medleyPlan.clips.length - 1) * Math.max(0, project.exportPreset.gapMs);
+    const medleyPreviewDurationMs = medleyPlan.durationMs;
     const nextPositionMs = Math.max(
       0,
       Math.min(medleyPreviewDurationMs, Math.round(requestedTimeMs))
@@ -598,6 +621,32 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
       cancelled = true;
     };
   }, [project, generatingTrackProxies]);
+
+  useEffect(() => {
+    if (!project || project.tracks.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void projectStore.refreshTrackAlignmentSuggestions().catch((error) => {
+      if (!cancelled) {
+        console.warn('[BeatStride][alignment-refresh]', error);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    project?.globalTargetBpm,
+    project?.mixTuning.harmonicTolerance,
+    project?.mixTuning.harmonicMappingEnabled,
+    project?.mixTuning.halfMapUpperBpm,
+    tracks
+      .map(
+        (track) =>
+          `${track.id}:${track.detectedBpm ?? track.sourceBpm}:${track.targetBpm ?? ''}:${track.downbeatOffsetMs}:${track.beatsPerBar}:${track.timeSignature}`
+      )
+      .join('|')
+  ]);
 
   useEffect(() => {
     if (!resizing) {
