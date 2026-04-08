@@ -13,7 +13,7 @@
   <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=061A23" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white" />
   <img alt="Vitest" src="https://img.shields.io/badge/Tested%20with-Vitest-6E9F18?logo=vitest&logoColor=white" />
-  <img alt="License" src="https://img.shields.io/badge/License-not%20specified-lightgrey" />
+  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" /></a>
 </p>
 
 ---
@@ -300,4 +300,4 @@ examples/beatstride-sample.runbeat-project.json
 
 ## 许可证
 
-当前仓库尚未声明开源许可证。若计划正式对外开源，请在发布前补充 `LICENSE` 文件，并在本节更新对应许可证说明。
+本项目使用 [MIT License](./LICENSE) 开源。你可以自由使用、复制、修改、合并、发布、分发、再授权或销售本软件的副本，但需要在副本或重要部分中保留原始版权声明与许可声明。
