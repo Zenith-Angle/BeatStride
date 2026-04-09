@@ -22,6 +22,7 @@ export interface ExportPreset {
   bitrateKbps: number;
   outputDir: string;
   fileSuffix: string;
+  medleyBaseName: string;
   normalizeLoudness: boolean;
   gapMs: number;
   crossfadeMs: number;
@@ -217,6 +218,7 @@ export interface MedleyExportPlan {
   mode: 'medley';
   projectFilePath?: string;
   outputDir: string;
+  outputBaseName: string;
   format: ExportFormat;
   normalizeLoudness: boolean;
   gapMs: number;
@@ -301,6 +303,7 @@ export interface ExportBuildSettings {
   metronomeSamplePath: string;
   normalizeLoudness: boolean;
   projectFilePath?: string;
+  medleyBaseName?: string;
   gapMs?: number;
   crossfadeMs?: number;
   mixTuning: MixTuningSettings;
@@ -317,4 +320,36 @@ export interface ProjectRenderOptions {
   targetLufs: number;
   targetLra: number;
   targetTp: number;
+}
+
+export interface MetronomeRenderRequest {
+  samplePath: string;
+  outputPath: string;
+  durationMs: number;
+  beatTimesMs: number[];
+  accentPattern: number[];
+  beatGainDb: number;
+  beatRenderMode: BeatRenderMode;
+  beatOriginalBpm: number;
+  metronomeBpm: number;
+  sampleRate: number;
+  channels: number;
+}
+
+export interface MetronomeRenderResult {
+  durationMs: number;
+  sampleRate: number;
+  channels: number;
+  usedSample: boolean;
+  samplePath: string;
+  beatCount: number;
+  beatRenderMode: BeatRenderMode;
+  beatGainDb: number;
+  playbackRate: number;
+  onsetCount: number;
+  hasDistinctAccent: boolean;
+  accentClickSamples: number;
+  normalClickSamples: number;
+  accentSourceIndex: number;
+  normalSourceIndex: number;
 }
