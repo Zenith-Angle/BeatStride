@@ -79,6 +79,14 @@ function cloneProject(project: ProjectFile): ProjectFile {
   return structuredClone(project);
 }
 
+function getParentDirectory(filePath?: string): string {
+  if (!filePath) {
+    return '';
+  }
+  const separatorIndex = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  return separatorIndex >= 0 ? filePath.slice(0, separatorIndex) : '';
+}
+
 function toTrackAlignmentSuggestion(
   suggestion?: TrackAlignmentSuggestionResult
 ): TrackAlignmentSuggestion | undefined {
@@ -174,7 +182,10 @@ function normalizeProject(project: ProjectFile): ProjectFile {
     defaultMetronomeSamplePath,
     exportPreset: {
       ...DEFAULT_EXPORT_PRESET,
-      ...(project.exportPreset ?? {})
+      ...(project.exportPreset ?? {}),
+      outputDir:
+        project.exportPreset?.outputDir?.trim() || getParentDirectory(project.meta.filePath),
+      medleyBaseName: project.exportPreset?.medleyBaseName?.trim() ?? ''
     },
     mixTuning,
     tracks: project.tracks.map((track) => ({
@@ -266,7 +277,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!saved) {
       return;
     }
-    set({ project: saved, dirty: false, lastSavedAt: new Date().toISOString() });
+    set({ project: normalizeProject(saved), dirty: false, lastSavedAt: new Date().toISOString() });
   },
   saveProjectAs: async () => {
     const state = get();
@@ -277,7 +288,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (!saved) {
       return;
     }
-    set({ project: saved, dirty: false, lastSavedAt: new Date().toISOString() });
+    set({ project: normalizeProject(saved), dirty: false, lastSavedAt: new Date().toISOString() });
   },
   loadRecovery: async () => {
     const recovered = await window.beatStride.loadRecovery();
