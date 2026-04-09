@@ -78,4 +78,36 @@ describe('projectStore migration', () => {
     expect(track?.analysisConfidence).toBe(0.5);
     expect(track?.meterConfidence).toBe(0);
   });
+
+  test('fills missing export directory from project file path', () => {
+    const legacyProject = {
+      version: 2,
+      meta: {
+        id: 'legacy-export-project',
+        name: 'Legacy Export',
+        filePath: 'C:/Projects/BeatStride/legacy.runbeat-project.json',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      globalTargetBpm: 180,
+      timeSignature: '4/4',
+      defaultMetronomeSamplePath: '',
+      theme: 'light',
+      language: 'zh-CN',
+      exportPreset: {
+        ...DEFAULT_EXPORT_PRESET,
+        outputDir: ''
+      },
+      mixTuning: {
+        ...DEFAULT_MIX_TUNING
+      },
+      tracks: []
+    } as unknown as ProjectFile;
+
+    useProjectStore.getState().setProject(legacyProject);
+
+    const exportPreset = useProjectStore.getState().project?.exportPreset;
+    expect(exportPreset?.outputDir).toBe('C:/Projects/BeatStride');
+    expect(exportPreset?.medleyBaseName).toBe('');
+  });
 });

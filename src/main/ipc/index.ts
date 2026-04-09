@@ -172,7 +172,7 @@ export function registerIpcHandlers(): void {
     project.mixTuning.loudnormEnabled =
       settings.normalizeLoudnessByDefault ?? project.mixTuning.loudnormEnabled;
     project.exportPreset.outputDir =
-      settings.defaultExportDir || project.exportPreset.outputDir;
+      dirPath || settings.defaultExportDir || project.exportPreset.outputDir;
     if (settings.defaultMetronomeSamplePath) {
       project.defaultMetronomeSamplePath = settings.defaultMetronomeSamplePath;
     }

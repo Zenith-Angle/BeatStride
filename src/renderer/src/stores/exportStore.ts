@@ -12,11 +12,21 @@ interface ExportState {
   exportSingleTrack: (
     track: Track,
     project: ProjectFile,
-    options: { outputDir: string; format: 'wav' | 'mp3'; bitrateKbps: number }
+    options: {
+      outputDir: string;
+      format: 'wav' | 'mp3';
+      bitrateKbps: number;
+      outputBaseName?: string;
+    }
   ) => Promise<void>;
   exportMedley: (
     project: ProjectFile,
-    options: { outputDir: string; format: 'wav' | 'mp3'; bitrateKbps: number }
+    options: {
+      outputDir: string;
+      format: 'wav' | 'mp3';
+      bitrateKbps: number;
+      outputBaseName?: string;
+    }
   ) => Promise<void>;
 }
 
@@ -68,6 +78,9 @@ export const useExportStore = create<ExportState>((set) => ({
         projectFilePath: project.meta.filePath,
         mixTuning: project.mixTuning
       });
+      if (options.outputBaseName?.trim()) {
+        plan.track.outputBaseName = options.outputBaseName.trim();
+      }
       const outputPath = await window.beatStride.runSingleExport({
         id,
         plan,
@@ -108,6 +121,7 @@ export const useExportStore = create<ExportState>((set) => ({
         format: options.format,
         metronomeSamplePath: project.defaultMetronomeSamplePath,
         normalizeLoudness: project.mixTuning.loudnormEnabled,
+        medleyBaseName: options.outputBaseName,
         gapMs: project.exportPreset.gapMs,
         crossfadeMs: project.exportPreset.crossfadeMs > 0 ? project.exportPreset.crossfadeMs : undefined,
         mixTuning: project.mixTuning,

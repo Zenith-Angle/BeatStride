@@ -11,7 +11,7 @@ import type {
 } from '../types';
 import { resolveTrackAlignment } from './alignmentService';
 import { generateBeatTimes } from './beatGridService';
-import { buildOutputFileName } from '../utils/fileName';
+import { buildMedleyOutputBaseName, buildOutputFileName } from '../utils/fileName';
 import { normalizeAccentPattern } from './meterService';
 import { getWorkspaceTracks } from './workspaceOrderService';
 
@@ -149,6 +149,10 @@ export function buildMedleyExportPlan(
     mode: 'medley',
     projectFilePath: project.meta.filePath,
     outputDir: settings.outputDir,
+    outputBaseName: buildMedleyOutputBaseName(
+      project.meta.name,
+      settings.medleyBaseName ?? project.exportPreset.medleyBaseName
+    ),
     format: settings.format,
     normalizeLoudness: settings.normalizeLoudness,
     gapMs,

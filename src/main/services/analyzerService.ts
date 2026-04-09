@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process';
 import { app } from 'electron';
 import type {
   MixTuningSettings,
+  MetronomeRenderRequest,
+  MetronomeRenderResult,
   TrackAnalysisResult,
   TrackAlignmentSuggestionResult,
   TimeSignature
@@ -11,6 +13,10 @@ import type {
 
 interface AnalyzerResponse<T> {
   results: T[];
+}
+
+interface AnalyzerSingleResponse<T> {
+  result: T;
 }
 
 interface AnalyzerCommandCandidate {
@@ -63,12 +69,12 @@ function resolveAnalyzerCandidates(): AnalyzerCommandCandidate[] {
   return candidates;
 }
 
-function invokeAnalyzer<T>(
+function invokeAnalyzer(
   candidate: AnalyzerCommandCandidate,
   subcommand: string,
   payload: unknown,
   ffmpegPath?: string
-): Promise<T[]> {
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(candidate.command, [...candidate.args, subcommand], {
       cwd: resolveAppRoot(),
@@ -91,17 +97,7 @@ function invokeAnalyzer<T>(
         reject(new Error(stderr.trim() || `analyzer exited with ${code}`));
         return;
       }
-
-      try {
-        const parsed = JSON.parse(stdout) as AnalyzerResponse<T>;
-        resolve(parsed.results ?? []);
-      } catch (error) {
-        reject(
-          new Error(
-            `analyzer 输出无法解析: ${error instanceof Error ? error.message : String(error)}`
-          )
-        );
-      }
+      resolve(stdout);
     });
 
     child.stdin.write(JSON.stringify(payload));
@@ -137,12 +133,19 @@ export class AnalyzerService {
       >;
     },
     ffmpegPath?: string
-  ): Promise<TrackAlignmentSuggestionResult[]> {
+    ): Promise<TrackAlignmentSuggestionResult[]> {
     return this.invokeMany<TrackAlignmentSuggestionResult>(
       'suggest-track-alignments',
       payload,
       ffmpegPath
     );
+  }
+
+  async renderMetronomeTrack(
+    payload: MetronomeRenderRequest,
+    ffmpegPath?: string
+  ): Promise<MetronomeRenderResult> {
+    return this.invokeSingle<MetronomeRenderResult>('render-metronome-track', payload, ffmpegPath);
   }
 
   private async invokeMany<T>(
@@ -158,7 +161,35 @@ export class AnalyzerService {
     const errors: string[] = [];
     for (const candidate of candidates) {
       try {
-        return await invokeAnalyzer<T>(candidate, subcommand, payload, ffmpegPath);
+        const stdout = await invokeAnalyzer(candidate, subcommand, payload, ffmpegPath);
+        const parsed = JSON.parse(stdout) as AnalyzerResponse<T>;
+        return parsed.results ?? [];
+      } catch (error) {
+        errors.push(
+          `${candidate.command}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+
+    throw new Error(errors.join(' | '));
+  }
+
+  private async invokeSingle<T>(
+    subcommand: string,
+    payload: unknown,
+    ffmpegPath?: string
+  ): Promise<T> {
+    const candidates = resolveAnalyzerCandidates();
+    if (candidates.length === 0) {
+      throw new Error('未找到 beatstride-analyzer，可先构建 sidecar。');
+    }
+
+    const errors: string[] = [];
+    for (const candidate of candidates) {
+      try {
+        const stdout = await invokeAnalyzer(candidate, subcommand, payload, ffmpegPath);
+        const parsed = JSON.parse(stdout) as AnalyzerSingleResponse<T>;
+        return parsed.result;
       } catch (error) {
         errors.push(
           `${candidate.command}: ${error instanceof Error ? error.message : String(error)}`
