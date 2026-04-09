@@ -35,3 +35,11 @@ export function buildOutputFileName(
   }
   return parts.join('__');
 }
+
+export function buildMedleyOutputBaseName(
+  projectName?: string,
+  customBaseName?: string
+): string {
+  const baseCandidate = (customBaseName?.trim() || projectName?.trim() || 'beatstride_medley').trim();
+  return sanitizeFileName(stripExtension(baseCandidate) || 'beatstride_medley');
+}

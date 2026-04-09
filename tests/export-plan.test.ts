@@ -118,6 +118,7 @@ describe('buildMedleyExportPlan', () => {
         bitrateKbps: 320,
         outputDir: '',
         fileSuffix: '',
+        medleyBaseName: '',
         normalizeLoudness: false,
         gapMs: 0,
         crossfadeMs: 0
@@ -138,6 +139,7 @@ describe('buildMedleyExportPlan', () => {
     });
     expect(plan.clips).toHaveLength(1);
     expect(plan.clips[0]?.transitionInMs).toBe(0);
+    expect(plan.outputBaseName).toBe('Project');
   });
 
   test('combines tracks in workspace order', () => {
@@ -166,6 +168,7 @@ describe('buildMedleyExportPlan', () => {
         bitrateKbps: 320,
         outputDir: '',
         fileSuffix: '',
+        medleyBaseName: '',
         normalizeLoudness: false,
         gapMs: 0,
         crossfadeMs: 0
@@ -224,6 +227,7 @@ describe('buildMedleyExportPlan', () => {
         bitrateKbps: 320,
         outputDir: '',
         fileSuffix: '',
+        medleyBaseName: '',
         normalizeLoudness: false,
         gapMs: 0,
         crossfadeMs: 0
@@ -245,6 +249,52 @@ describe('buildMedleyExportPlan', () => {
     });
 
     expect(plan.clips[1]?.transitionInMs).toBe(Math.round((60000 / 180) * 4 * 2));
+  });
+
+  test('prefers custom medley base name when provided', () => {
+    const project: ProjectFile = {
+      version: 2,
+      meta: {
+        id: 'p4',
+        name: 'Morning Run',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      globalTargetBpm: 180,
+      timeSignature: '4/4',
+      defaultMetronomeSamplePath: '',
+      theme: 'light',
+      language: 'zh-CN',
+      tracks: [track],
+      exportPreset: {
+        mode: 'medley',
+        format: 'wav',
+        sampleRate: 48000,
+        bitrateKbps: 320,
+        outputDir: '',
+        fileSuffix: '',
+        medleyBaseName: 'Road Mix',
+        normalizeLoudness: false,
+        gapMs: 0,
+        crossfadeMs: 0
+      },
+      mixTuning: {
+        ...DEFAULT_MIX_TUNING
+      }
+    };
+
+    const plan = buildMedleyExportPlan(project, {
+      globalTargetBpm: project.globalTargetBpm,
+      outputDir: 'C:/exports',
+      format: 'wav',
+      metronomeSamplePath: '',
+      normalizeLoudness: false,
+      medleyBaseName: project.exportPreset.medleyBaseName,
+      gapMs: 0,
+      mixTuning: project.mixTuning
+    });
+
+    expect(plan.outputBaseName).toBe('Road Mix');
   });
 });
 

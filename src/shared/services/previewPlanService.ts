@@ -13,7 +13,7 @@ export function buildSingleTrackPreviewExportPlan(
     outputDir: '',
     format: 'wav',
     metronomeSamplePath: project.defaultMetronomeSamplePath,
-    normalizeLoudness: false,
+    normalizeLoudness: project.mixTuning.loudnormEnabled,
     mixTuning: project.mixTuning
   });
 }
@@ -31,7 +31,8 @@ export function buildProjectPreviewExportPlan(project: ProjectFile) {
     outputDir: '',
     format: 'wav',
     metronomeSamplePath: project.defaultMetronomeSamplePath,
-    normalizeLoudness: false,
+    normalizeLoudness: project.mixTuning.loudnormEnabled,
+    medleyBaseName: project.exportPreset.medleyBaseName,
     gapMs: project.exportPreset.gapMs,
     crossfadeMs: project.exportPreset.crossfadeMs > 0 ? project.exportPreset.crossfadeMs : undefined,
     mixTuning: project.mixTuning
