@@ -32,6 +32,10 @@ function resolveDefaultMetronomePath(candidate?: string): string {
   return '';
 }
 
+function resolveProjectExportDir(filePath: string, currentOutputDir?: string): string {
+  return currentOutputDir?.trim() || path.dirname(filePath);
+}
+
 export function createEmptyProject(): ProjectFile {
   const now = new Date().toISOString();
   const bundledMetronomeSamplePath = path.join(
@@ -118,6 +122,11 @@ export class ProjectService {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(raw) as ProjectFile;
     parsed.meta.filePath = filePath;
+    parsed.exportPreset = {
+      ...DEFAULT_EXPORT_PRESET,
+      ...(parsed.exportPreset ?? {}),
+      outputDir: resolveProjectExportDir(filePath, parsed.exportPreset?.outputDir)
+    };
     parsed.defaultMetronomeSamplePath = resolveDefaultMetronomePath(
       parsed.defaultMetronomeSamplePath
     );
@@ -141,6 +150,11 @@ export class ProjectService {
         ...project.meta,
         filePath,
         updatedAt: new Date().toISOString()
+      },
+      exportPreset: {
+        ...DEFAULT_EXPORT_PRESET,
+        ...(project.exportPreset ?? {}),
+        outputDir: resolveProjectExportDir(filePath, project.exportPreset?.outputDir)
       }
     };
     fs.writeFileSync(filePath, JSON.stringify(next, null, 2), 'utf-8');

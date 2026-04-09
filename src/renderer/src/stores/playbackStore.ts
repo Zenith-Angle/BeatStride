@@ -974,7 +974,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
     try {
       const previewPayloadTask = window.beatStride.prepareSinglePreviewAudio({
         plan: exportPlan,
-        mode: mode === 'original' ? 'original' : 'processed'
+        mode
       });
       const metronomeBufferTask =
         mode === 'metronome'
@@ -1005,20 +1005,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           trackId: track.id,
           previewDurationMs,
           sourceFilePath: playbackSourcePath,
-          beatTimesMs: mode === 'metronome' ? trackPlan.beatTimesMs : [],
-          beatAccentValues:
-            mode === 'metronome'
-              ? createAccentValues(trackPlan.beatTimesMs.length, trackPlan.accentPattern)
-              : [],
-          beatGainValues:
-            mode === 'metronome'
-              ? Array.from({ length: trackPlan.beatTimesMs.length }, () => beatGainLinear)
-              : [],
-          beatsPerBar: trackPlan.beatsPerBar,
-          metronomeSamplePath,
-          beatRenderMode: project.mixTuning.beatRenderMode,
-          beatOriginalBpm: project.mixTuning.beatOriginalBpm,
-          metronomeBpm: trackPlan.metronomeBpm
+          beatTimesMs: [],
+          beatAccentValues: [],
+          beatGainValues: [],
+          beatsPerBar: trackPlan.beatsPerBar
         })
       ];
       await playSegments(segments, token, startPreviewMs, set);
@@ -1092,7 +1082,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       try {
         const previewPayloadTask = window.beatStride.prepareMedleyPreviewAudio({
           plan: medleyPlan,
-          mode: 'processed'
+          mode
         });
         const metronomeBufferTask =
           mode === 'metronome'
@@ -1106,39 +1096,14 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         const token = playbackToken;
         const playbackSourcePath = await resolvePreparedAudioSource(playbackPayload);
         pushDebug(set, `串烧预览音频已就绪 | ${playbackPayload.fileName}`);
-        const medleyBeatTimes =
-          mode === 'metronome'
-            ? medleyPlan.clips.flatMap((clip) =>
-                clip.track.beatTimesMs.map((beatMs) => clip.timelineStartMs + beatMs)
-              )
-            : [];
-        const medleyBeatAccentValues =
-          mode === 'metronome'
-            ? medleyPlan.clips.flatMap((clip) =>
-                createAccentValues(clip.track.beatTimesMs.length, clip.track.accentPattern)
-              )
-            : [];
-        const medleyBeatGainValues =
-          mode === 'metronome'
-            ? medleyPlan.clips.flatMap((clip) =>
-                Array.from(
-                  { length: clip.track.beatTimesMs.length },
-                  () => dbToLinear(clip.track.metronomeVolumeDb + project.mixTuning.beatGainDb)
-                )
-              )
-            : [];
         const segment = createRenderedSegment({
           label: '串烧试听',
           previewDurationMs: medleyPlan.durationMs,
           sourceFilePath: playbackSourcePath,
-          beatTimesMs: medleyBeatTimes,
-          beatAccentValues: medleyBeatAccentValues,
-          beatGainValues: medleyBeatGainValues,
+          beatTimesMs: [],
+          beatAccentValues: [],
+          beatGainValues: [],
           beatsPerBar: medleyPlan.clips[0]?.track.beatsPerBar ?? 4,
-          metronomeSamplePath,
-          beatRenderMode: project.mixTuning.beatRenderMode,
-          beatOriginalBpm: project.mixTuning.beatOriginalBpm,
-          metronomeBpm: project.globalTargetBpm,
           resolveTrackId: (previewTimeMs) =>
             medleyPlan.clips.find(
               (clip) =>
@@ -1164,12 +1129,8 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           strategy: 'full-render-crossfade',
           previewFileName: playbackPayload.fileName,
           durationMs: medleyPlan.durationMs,
-          beatCount: medleyBeatTimes.length,
-          metronomeSamplePath,
-          firstBeatGain:
-            medleyBeatGainValues.length > 0
-              ? Number((medleyBeatGainValues[0] ?? 1).toFixed(4))
-              : null
+          beatCount: 0,
+          metronomeSamplePath
         });
         await playSegments([segment], token, startPreviewMs, set);
       } catch (error) {
@@ -1295,7 +1256,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
       }
       const task = window.beatStride.prepareSinglePreviewAudio({
         plan: segment.previewPlan,
-        mode: 'processed'
+        mode
       });
       void task.then(() => {
         if (!medleySeekFallbackEnabled || requestToken !== playbackRequestToken) {
@@ -1385,14 +1346,10 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
               trackId: segment.trackId,
               previewDurationMs: segment.durationMs,
               sourceFilePath: playbackSourcePath,
-              beatTimesMs: mode === 'metronome' ? segment.beatTimesMs : [],
-              beatAccentValues: mode === 'metronome' ? segment.beatAccentValues : [],
-              beatGainValues: mode === 'metronome' ? segment.beatGainValues : [],
-              beatsPerBar: segment.beatsPerBar,
-            metronomeSamplePath,
-            beatRenderMode: project.mixTuning.beatRenderMode,
-            beatOriginalBpm: project.mixTuning.beatOriginalBpm,
-            metronomeBpm: segment.metronomeBpm
+              beatTimesMs: [],
+              beatAccentValues: [],
+              beatGainValues: [],
+              beatsPerBar: segment.beatsPerBar
           }),
           baseMs,
           token,
