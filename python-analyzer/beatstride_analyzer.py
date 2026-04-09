@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
+import wave
+from pathlib import Path
 from typing import Any
 
 try:
@@ -25,6 +28,15 @@ SUPPORTED_METERS: dict[str, dict[str, Any]] = {
 DEFAULT_TIME_SIGNATURE = "4/4"
 DEFAULT_BEATS_PER_BAR = 4
 INTERMEDIATE_TARGET_BPM = 120.0
+DEFAULT_SAMPLE_RATE = 48000
+DEFAULT_CHANNELS = 2
+DEFAULT_CLICK_MS = 45.0
+MAX_CLICK_MS = 140.0
+CLICK_PRE_ROLL_MS = 4.0
+MIN_CLICK_MS = 18.0
+QUIET_TAIL_MS = 12.0
+FADE_IN_MS = 2.0
+FADE_OUT_MS = 8.0
 
 
 def ensure_runtime() -> None:
@@ -369,6 +381,377 @@ def analyze_track(file_path: str, analysis_seconds: float) -> dict[str, Any]:
     }
 
 
+def db_to_linear(db_value: float) -> float:
+    return 10 ** (float(db_value) / 20.0)
+
+
+def ms_to_samples(duration_ms: float, sample_rate: int) -> int:
+    return max(0, int(round(float(duration_ms) * sample_rate / 1000.0)))
+
+
+def normalize_audio_shape(audio: Any) -> Any:
+    array = np.asarray(audio, dtype=np.float32)
+    if array.ndim == 1:
+        return array.reshape(1, -1)
+    if array.ndim != 2:
+        raise RuntimeError(f"不支持的音频维度: {array.ndim}")
+    return array
+
+
+def align_channels(audio: Any, channels: int) -> Any:
+    normalized = normalize_audio_shape(audio)
+    if channels <= 1:
+        return np.mean(normalized, axis=0, keepdims=True)
+    if normalized.shape[0] == channels:
+        return normalized
+    if normalized.shape[0] == 1:
+        return np.repeat(normalized, channels, axis=0)
+    if normalized.shape[0] > channels:
+        return normalized[:channels]
+    extra = np.repeat(normalized[-1:], channels - normalized.shape[0], axis=0)
+    return np.concatenate([normalized, extra], axis=0)
+
+
+def apply_edge_fade(audio: Any, sample_rate: int) -> Any:
+    array = np.asarray(audio, dtype=np.float32).copy()
+    if array.size == 0:
+        return array
+    fade_in = min(array.shape[1], ms_to_samples(FADE_IN_MS, sample_rate))
+    fade_out = min(array.shape[1], ms_to_samples(FADE_OUT_MS, sample_rate))
+    if fade_in > 1:
+        ramp = np.linspace(0.0, 1.0, fade_in, dtype=np.float32)
+        array[:, :fade_in] *= ramp
+    if fade_out > 1:
+        ramp = np.linspace(1.0, 0.0, fade_out, dtype=np.float32)
+        array[:, -fade_out:] *= ramp
+    return array
+
+
+def peak_normalize(audio: Any, target_peak: float = 0.95) -> Any:
+    array = np.asarray(audio, dtype=np.float32)
+    if array.size == 0:
+        return array.copy()
+    peak = float(np.max(np.abs(array)))
+    if peak <= 1e-6:
+        return array.copy()
+    scaled = array * min(1.0, float(target_peak) / peak)
+    return scaled.astype(np.float32)
+
+
+def build_synthetic_click(
+    sample_rate: int,
+    channels: int,
+    accent: bool,
+    mode: str,
+) -> Any:
+    duration_ms = 32.0 if mode == "crisp-click" else DEFAULT_CLICK_MS
+    total_samples = max(1, ms_to_samples(duration_ms, sample_rate))
+    timeline = np.linspace(0.0, duration_ms / 1000.0, total_samples, endpoint=False, dtype=np.float32)
+    if accent:
+        frequency_a = 1880.0
+        frequency_b = 2680.0
+        amplitude = 0.94
+    else:
+        frequency_a = 1560.0
+        frequency_b = 2320.0
+        amplitude = 0.82
+    envelope = np.exp(-timeline * (36.0 if mode == "crisp-click" else 24.0)).astype(np.float32)
+    waveform = (
+        0.78 * np.sin(2.0 * np.pi * frequency_a * timeline)
+        + 0.22 * np.sin(2.0 * np.pi * frequency_b * timeline)
+    ).astype(np.float32)
+    click = (waveform * envelope * amplitude).reshape(1, -1)
+    click = align_channels(click, channels)
+    return apply_edge_fade(click, sample_rate)
+
+
+def load_audio_for_render(sample_path: str, sample_rate: int, channels: int) -> Any:
+    ensure_runtime()
+    if not sample_path or not os.path.exists(sample_path):
+        raise FileNotFoundError(sample_path)
+    mono = channels <= 1
+    loaded, _ = librosa.load(sample_path, sr=sample_rate, mono=mono)
+    audio = align_channels(loaded, channels)
+    if audio.size == 0:
+        raise RuntimeError("节拍器样本为空")
+    return audio.astype(np.float32)
+
+
+def find_sample_onsets(audio: Any, sample_rate: int) -> tuple[Any, Any]:
+    mono = np.mean(np.abs(audio), axis=0)
+    if mono.size == 0:
+        return np.asarray([], dtype=int), np.asarray([], dtype=float)
+    hop_length = 256 if sample_rate >= 22050 else 128
+    onset_env = librosa.onset.onset_strength(y=mono, sr=sample_rate, hop_length=hop_length)
+    onset_frames = np.asarray(
+        librosa.onset.onset_detect(
+            onset_envelope=onset_env,
+            sr=sample_rate,
+            hop_length=hop_length,
+            units="frames",
+            backtrack=False,
+            pre_max=3,
+            post_max=3,
+            pre_avg=3,
+            post_avg=5,
+            delta=0.05,
+            wait=1,
+        ),
+        dtype=int,
+    ).reshape(-1)
+    onset_samples = librosa.frames_to_samples(onset_frames, hop_length=hop_length)
+    onset_scores = (
+        onset_env[np.clip(onset_frames, 0, max(0, onset_env.size - 1))]
+        if onset_frames.size > 0
+        else np.asarray([], dtype=float)
+    )
+    if onset_samples.size == 0:
+        onset_samples = np.asarray([int(np.argmax(mono))], dtype=int)
+        onset_scores = np.asarray([float(np.max(mono))], dtype=float)
+    return onset_samples.astype(int), onset_scores.astype(float)
+
+
+def extract_click_clip(
+    audio: Any,
+    onset_sample: int,
+    next_onset_sample: int | None,
+    sample_rate: int,
+) -> Any:
+    start = max(0, int(onset_sample) - ms_to_samples(CLICK_PRE_ROLL_MS, sample_rate))
+    max_end = min(audio.shape[1], start + ms_to_samples(MAX_CLICK_MS, sample_rate))
+    if next_onset_sample is not None:
+        next_guard = max(start + ms_to_samples(MIN_CLICK_MS, sample_rate), int(next_onset_sample))
+        max_end = min(max_end, next_guard)
+    if max_end <= start:
+        max_end = min(audio.shape[1], start + ms_to_samples(DEFAULT_CLICK_MS, sample_rate))
+    segment = audio[:, start:max_end]
+    if segment.size == 0:
+        return np.zeros((audio.shape[0], 1), dtype=np.float32)
+
+    mono = np.mean(np.abs(segment), axis=0)
+    min_len = max(1, ms_to_samples(MIN_CLICK_MS, sample_rate))
+    quiet_len = max(1, ms_to_samples(QUIET_TAIL_MS, sample_rate))
+    smoothing_window = max(3, int(sample_rate * 0.002))
+    kernel = np.ones(smoothing_window, dtype=np.float32) / float(smoothing_window)
+    smoothed = np.convolve(mono, kernel, mode="same")
+    peak = float(np.max(smoothed)) if smoothed.size > 0 else 0.0
+    threshold = max(peak * 0.08, 2e-4)
+
+    end_index = segment.shape[1]
+    search_upper = max(min_len, smoothed.size - quiet_len)
+    for index in range(min_len, search_upper):
+        if np.all(smoothed[index : index + quiet_len] <= threshold):
+            end_index = index + quiet_len
+            break
+
+    trimmed = segment[:, : max(min_len, end_index)]
+    return apply_edge_fade(peak_normalize(trimmed), sample_rate)
+
+
+def analyze_sample_clicks(
+    sample_path: str,
+    sample_rate: int,
+    channels: int,
+    mode: str,
+) -> dict[str, Any]:
+    if mode == "crisp-click" or not sample_path or not os.path.exists(sample_path):
+        accent_clip = build_synthetic_click(sample_rate, channels, True, mode)
+        normal_clip = build_synthetic_click(sample_rate, channels, False, mode)
+        return {
+            "usedSample": False,
+            "samplePath": sample_path,
+            "accentClip": accent_clip,
+            "normalClip": normal_clip,
+            "hasDistinctAccent": True,
+            "onsetCount": 0,
+            "accentSourceIndex": -1,
+            "normalSourceIndex": -1,
+        }
+
+    try:
+        audio = load_audio_for_render(sample_path, sample_rate, channels)
+    except Exception:
+        accent_clip = build_synthetic_click(sample_rate, channels, True, mode)
+        normal_clip = build_synthetic_click(sample_rate, channels, False, mode)
+        return {
+            "usedSample": False,
+            "samplePath": sample_path,
+            "accentClip": accent_clip,
+            "normalClip": normal_clip,
+            "hasDistinctAccent": True,
+            "onsetCount": 0,
+            "accentSourceIndex": -1,
+            "normalSourceIndex": -1,
+        }
+
+    onset_samples, onset_scores = find_sample_onsets(audio, sample_rate)
+    onset_count = int(onset_samples.size)
+    order = np.argsort(onset_scores)[::-1] if onset_scores.size > 0 else np.asarray([], dtype=int)
+    accent_index = int(order[0]) if order.size > 0 else 0
+
+    normal_index = accent_index
+    if order.size > 1:
+        strongest = float(onset_scores[accent_index])
+        for candidate in order[1:]:
+            if strongest <= 1e-6 or float(onset_scores[candidate]) <= strongest * 0.92:
+                normal_index = int(candidate)
+                break
+        else:
+            normal_index = int(order[1])
+
+    onset_list = onset_samples.tolist()
+    accent_next = onset_list[accent_index + 1] if accent_index + 1 < len(onset_list) else None
+    normal_next = onset_list[normal_index + 1] if normal_index + 1 < len(onset_list) else None
+
+    accent_clip = extract_click_clip(audio, onset_list[accent_index], accent_next, sample_rate)
+    normal_clip = extract_click_clip(audio, onset_list[normal_index], normal_next, sample_rate)
+    has_distinct_accent = bool(
+        onset_count > 1
+        and accent_index != normal_index
+        and float(onset_scores[accent_index]) > float(onset_scores[normal_index]) * 1.05
+    )
+    if not has_distinct_accent:
+        accent_clip = peak_normalize(accent_clip * 1.08)
+
+    return {
+        "usedSample": True,
+        "samplePath": sample_path,
+        "accentClip": accent_clip.astype(np.float32),
+        "normalClip": normal_clip.astype(np.float32),
+        "hasDistinctAccent": has_distinct_accent,
+        "onsetCount": onset_count,
+        "accentSourceIndex": accent_index,
+        "normalSourceIndex": normal_index,
+    }
+
+
+def stretch_audio_clip(audio: Any, playback_rate: float) -> Any:
+    array = np.asarray(audio, dtype=np.float32)
+    rate = max(0.05, float(playback_rate))
+    if array.size == 0 or abs(rate - 1.0) <= 1e-4:
+        return array.copy()
+    source_len = array.shape[1]
+    if source_len <= 1:
+        return array.copy()
+    target_len = max(1, int(round(source_len / rate)))
+    source_positions = np.arange(source_len, dtype=np.float32)
+    target_positions = np.linspace(0.0, source_len - 1, target_len, dtype=np.float32)
+    stretched = np.vstack(
+        [
+            np.interp(target_positions, source_positions, array[channel]).astype(np.float32)
+            for channel in range(array.shape[0])
+        ]
+    )
+    return stretched.astype(np.float32)
+
+
+def mix_clip_into_buffer(buffer: Any, clip: Any, start_sample: int, gain: float) -> None:
+    if clip.size == 0 or gain <= 0:
+        return
+    if start_sample >= buffer.shape[1]:
+        return
+    end_sample = min(buffer.shape[1], start_sample + clip.shape[1])
+    clip_end = max(0, end_sample - start_sample)
+    if clip_end <= 0:
+        return
+    buffer[:, start_sample:end_sample] += clip[:, :clip_end] * float(gain)
+
+
+def write_wave_file(output_path: str, audio: Any, sample_rate: int) -> None:
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    normalized = np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0)
+    pcm = (normalized.T * 32767.0).astype("<i2")
+    with wave.open(output_path, "wb") as handle:
+        handle.setnchannels(int(normalized.shape[0]))
+        handle.setsampwidth(2)
+        handle.setframerate(int(sample_rate))
+        handle.writeframes(pcm.tobytes())
+
+
+def render_metronome_audio(payload: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    ensure_runtime()
+    sample_rate = max(8000, int(payload.get("sampleRate") or DEFAULT_SAMPLE_RATE))
+    channels = max(1, int(payload.get("channels") or DEFAULT_CHANNELS))
+    duration_ms = max(0.0, float(payload.get("durationMs") or 0.0))
+    beat_times_ms = [max(0.0, float(value)) for value in (payload.get("beatTimesMs") or [])]
+    beat_render_mode = str(payload.get("beatRenderMode") or "sampled-click")
+    accent_pattern_raw = payload.get("accentPattern") or [1.35, 1.0, 1.0, 1.0]
+    accent_pattern = [max(0.05, float(value)) for value in accent_pattern_raw]
+    beat_gain_db = float(payload.get("beatGainDb") or 0.0)
+    beat_gain_linear = db_to_linear(beat_gain_db)
+    beat_original_bpm = float(payload.get("beatOriginalBpm") or 0.0)
+    metronome_bpm = float(payload.get("metronomeBpm") or 0.0)
+    sample_path = str(payload.get("samplePath") or "")
+
+    total_samples = max(1, ms_to_samples(duration_ms, sample_rate))
+    output = np.zeros((channels, total_samples), dtype=np.float32)
+    click_analysis = analyze_sample_clicks(sample_path, sample_rate, channels, beat_render_mode)
+
+    playback_rate = (
+        metronome_bpm / max(beat_original_bpm, 1e-6)
+        if beat_render_mode == "stretched-file" and beat_original_bpm > 0 and metronome_bpm > 0
+        else 1.0
+    )
+
+    accent_clip_base = np.asarray(click_analysis["accentClip"], dtype=np.float32)
+    normal_clip_base = np.asarray(click_analysis["normalClip"], dtype=np.float32)
+    accent_clip = (
+        stretch_audio_clip(accent_clip_base, playback_rate)
+        if beat_render_mode == "stretched-file"
+        else accent_clip_base
+    )
+    normal_clip = (
+        stretch_audio_clip(normal_clip_base, playback_rate)
+        if beat_render_mode == "stretched-file"
+        else normal_clip_base
+    )
+
+    for index, beat_time_ms in enumerate(beat_times_ms):
+        accent_value = accent_pattern[index % len(accent_pattern)] if accent_pattern else 1.0
+        use_accent_clip = bool(
+            accent_value > 1.01
+            and (
+                click_analysis.get("hasDistinctAccent", False)
+                or index % max(len(accent_pattern), 1) == 0
+            )
+        )
+        clip = accent_clip if use_accent_clip else normal_clip
+        start_sample = ms_to_samples(beat_time_ms, sample_rate)
+        mix_clip_into_buffer(output, clip, start_sample, beat_gain_linear * accent_value)
+
+    peak = float(np.max(np.abs(output))) if output.size > 0 else 0.0
+    if peak > 0.999:
+        output /= peak
+
+    metadata = {
+        "durationMs": int(round(duration_ms)),
+        "sampleRate": sample_rate,
+        "channels": channels,
+        "usedSample": bool(click_analysis["usedSample"]),
+        "samplePath": sample_path if click_analysis["usedSample"] else "",
+        "beatCount": len(beat_times_ms),
+        "beatRenderMode": beat_render_mode,
+        "beatGainDb": round(beat_gain_db, 4),
+        "playbackRate": round(playback_rate, 6),
+        "onsetCount": int(click_analysis["onsetCount"]),
+        "hasDistinctAccent": bool(click_analysis["hasDistinctAccent"]),
+        "accentClickSamples": int(accent_clip.shape[1]),
+        "normalClickSamples": int(normal_clip.shape[1]),
+        "accentSourceIndex": int(click_analysis["accentSourceIndex"]),
+        "normalSourceIndex": int(click_analysis["normalSourceIndex"]),
+    }
+    return output.astype(np.float32), metadata
+
+
+def handle_render_metronome_track(payload: dict[str, Any]) -> dict[str, Any]:
+    output_path = str(payload.get("outputPath") or "").strip()
+    if not output_path:
+        raise RuntimeError("missing outputPath for render-metronome-track")
+    rendered_audio, metadata = render_metronome_audio(payload)
+    write_wave_file(output_path, rendered_audio, int(metadata["sampleRate"]))
+    return metadata
+
+
 def handle_analyze_tracks(payload: dict[str, Any]) -> list[dict[str, Any]]:
     tracks = payload.get("tracks") or []
     analysis_seconds = float(payload.get("analysisSeconds") or 0.0)
@@ -387,14 +770,19 @@ def main() -> int:
     payload = json.loads(sys.stdin.read() or "{}")
     subcommand = sys.argv[1]
     if subcommand == "analyze-tracks":
-        results = handle_analyze_tracks(payload)
-    elif subcommand == "suggest-track-alignments":
-        results = handle_suggest_track_alignments(payload)
-    else:
-        raise RuntimeError(f"unknown analyzer subcommand: {subcommand}")
-
-    sys.stdout.write(json.dumps({"results": results}, ensure_ascii=False))
-    return 0
+        sys.stdout.write(json.dumps({"results": handle_analyze_tracks(payload)}, ensure_ascii=False))
+        return 0
+    if subcommand == "suggest-track-alignments":
+        sys.stdout.write(
+            json.dumps({"results": handle_suggest_track_alignments(payload)}, ensure_ascii=False)
+        )
+        return 0
+    if subcommand == "render-metronome-track":
+        sys.stdout.write(
+            json.dumps({"result": handle_render_metronome_track(payload)}, ensure_ascii=False)
+        )
+        return 0
+    raise RuntimeError(f"unknown analyzer subcommand: {subcommand}")
 
 
 if __name__ == "__main__":
