@@ -29,6 +29,7 @@ export const DEFAULT_EXPORT_PRESET: ExportPreset = {
   bitrateKbps: 320,
   outputDir: '',
   fileSuffix: '__mix',
+  medleyBaseName: '',
   normalizeLoudness: false,
   gapMs: 0,
   crossfadeMs: 0

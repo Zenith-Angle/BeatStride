@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { app } from 'electron';
+import { AnalyzerService } from '@main/services/analyzerService';
 import type {
   GeneratedTrackProxy,
   MedleyExportPlan,
@@ -15,12 +16,12 @@ import type {
 } from '@shared/types';
 import { PROJECT_PROXY_DIRNAME } from '@shared/constants';
 import {
-  buildAtempoFilter,
   buildMedleyMixFilter,
   buildOutputCodecArgs,
   buildSingleTrackFilterGraph
 } from '@shared/services/ffmpegArgsBuilder';
 import { generateBeatTimes } from '@shared/services/beatGridService';
+import { buildMetronomeRenderRequest } from '@shared/services/metronomeRenderService';
 import { msToSec } from '@shared/utils/time';
 
 export interface FfmpegProgress {
@@ -33,6 +34,7 @@ const filterSupportCache = new Map<string, Map<string, boolean>>();
 const FILTER_SCRIPT_THRESHOLD = 4000;
 const TRACK_PROXY_BITRATE_KBPS = 160;
 const PREVIEW_BITRATE_KBPS = 160;
+const metronomeAnalyzer = new AnalyzerService();
 
 function parseFfmpegTimeToMs(timeString: string): number {
   const [hh, mm, ss] = timeString.split(':');
@@ -466,6 +468,7 @@ function buildSinglePreviewCachePath(
         plan: derivedPlan,
         source: buildFileStatSignature(derivedPlan.track.sourceFilePath),
         metronomeSample: buildFileStatSignature(plan.metronomeSamplePath),
+        metronomeRenderSpec: mode === 'metronome' ? buildSingleMetronomeRenderCacheSpec(derivedPlan) : null,
         bitrateKbps: PREVIEW_BITRATE_KBPS
       })
     )
@@ -486,11 +489,40 @@ function buildMedleyPreviewCachePath(
         plan: derivedPlan,
         sources: derivedPlan.clips.map((clip) => buildFileStatSignature(clip.track.sourceFilePath)),
         metronomeSample: buildFileStatSignature(plan.metronomeSamplePath),
+        metronomeRenderSpec:
+          mode === 'metronome'
+            ? derivedPlan.clips.map((clip) => {
+                const { outputPath: _, ...spec } = buildMetronomeRenderRequest(
+                  {
+                    metronomeSamplePath: plan.metronomeSamplePath,
+                    renderOptions: plan.renderOptions,
+                    track: clip.track
+                  },
+                  '__cache__'
+                );
+                return spec;
+              })
+            : null,
         bitrateKbps: PREVIEW_BITRATE_KBPS
       })
     )
     .digest('hex');
   return path.join(getPreviewCacheDir('medley'), `medley__${signature.slice(0, 16)}.mp3`);
+}
+
+function buildSingleMetronomeRenderCacheSpec(plan: SingleTrackExportPlan): Record<string, unknown> | null {
+  if (!plan.track.metronomeEnabled) {
+    return null;
+  }
+  const { outputPath: _, ...spec } = buildMetronomeRenderRequest(
+    {
+      metronomeSamplePath: plan.metronomeSamplePath,
+      renderOptions: plan.renderOptions,
+      track: plan.track
+    },
+    '__cache__'
+  );
+  return spec;
 }
 
 async function createMetronomeTrack(
@@ -510,110 +542,22 @@ async function createMetronomeTrack(
     await createSilence(ffmpegPath, 0, outputPath);
     return;
   }
-
-  const sampleExists = Boolean(samplePath && fs.existsSync(samplePath));
-  if (options.beatRenderMode === 'stretched-file' && sampleExists) {
-    if (beatTimesMs.length === 0) {
-      await createSilence(ffmpegPath, durationMs, outputPath);
-      return;
-    }
-
-    const ratio =
-      options.beatOriginalBpm > 0 ? options.metronomeBpm / options.beatOriginalBpm : 1;
-    const firstBeatMs = Math.max(0, Math.round(beatTimesMs[0] ?? 0));
-    const activeDurationMs = Math.max(0, durationMs - firstBeatMs);
-    if (activeDurationMs <= 0) {
-      await createSilence(ffmpegPath, durationMs, outputPath);
-      return;
-    }
-
-    const filter =
-      `[0:a]${buildAtempoFilter(Math.max(0.01, ratio))},` +
-      `atrim=0:${msToSec(activeDurationMs)},asetpts=PTS-STARTPTS,` +
-      `adelay=${firstBeatMs}|${firstBeatMs},atrim=0:${msToSec(durationMs)}[out]`;
-    const filterGraph = createFilterGraphArgs(filter, path.dirname(outputPath), 'metronome-file');
-    const args = [
-      '-y',
-      '-stream_loop',
-      '-1',
-      '-i',
+  await metronomeAnalyzer.renderMetronomeTrack(
+    {
       samplePath,
-      ...filterGraph.args,
-      '-map',
-      '[out]',
-      '-c:a',
-      'pcm_s16le',
-      outputPath
-    ];
-    try {
-      await runFfmpeg(ffmpegPath, args, durationMs);
-    } finally {
-      filterGraph.cleanup();
-    }
-    return;
-  }
-
-  if (beatTimesMs.length === 0) {
-    await createSilence(ffmpegPath, durationMs, outputPath);
-    return;
-  }
-
-  let effectiveSamplePath = samplePath;
-  let cleanupSyntheticSample = false;
-  if (!sampleExists) {
-    effectiveSamplePath = path.join(path.dirname(outputPath), 'synthetic-click.wav');
-    cleanupSyntheticSample = true;
-    const frequency = options.beatRenderMode === 'crisp-click' ? '1780' : '1450';
-    const clickSec = options.beatRenderMode === 'crisp-click' ? '0.035' : '0.06';
-    await runFfmpeg(
-      ffmpegPath,
-      [
-        '-y',
-        '-f',
-        'lavfi',
-        '-i',
-        `sine=frequency=${frequency}:duration=${clickSec}:sample_rate=48000`,
-        '-af',
-        'afade=t=in:st=0:d=0.002,afade=t=out:st=0.018:d=0.018',
-        '-c:a',
-        'pcm_s16le',
-        effectiveSamplePath
-      ],
-      60
-    );
-  }
-
-  const clickSec = options.beatRenderMode === 'crisp-click' ? 0.035 : 0.06;
-  const accentPattern = options.accentPattern.length > 0 ? options.accentPattern : [1.35, 1, 1, 1];
-  const nodes = beatTimesMs.map((time, idx) => {
-    const delay = Math.max(0, Math.round(time));
-    const accentGain = accentPattern[idx % accentPattern.length] ?? 1;
-    return `[0:a]atrim=0:${clickSec},asetpts=PTS-STARTPTS,volume=${accentGain},adelay=${delay}|${delay}[c${idx}]`;
-  });
-  const mixInputs = beatTimesMs.map((_, idx) => `[c${idx}]`).join('');
-  const filter = `${nodes.join(';')};${mixInputs}amix=inputs=${beatTimesMs.length}:normalize=0,atrim=0:${msToSec(durationMs)}[out]`;
-  const filterGraph = createFilterGraphArgs(filter, path.dirname(outputPath), 'metronome-filter');
-
-  const args = [
-    '-y',
-    '-i',
-    effectiveSamplePath,
-    ...filterGraph.args,
-    '-map',
-    '[out]',
-    '-c:a',
-    'pcm_s16le',
-    outputPath
-  ];
-
-  try {
-    await runFfmpeg(ffmpegPath, args, durationMs);
-  } finally {
-    filterGraph.cleanup();
-    if (cleanupSyntheticSample) {
-      fs.rmSync(effectiveSamplePath, { force: true });
-    }
-  }
+      outputPath,
+      durationMs: Math.max(0, Math.round(durationMs)),
+      beatTimesMs: beatTimesMs.map((value) => Math.max(0, Math.round(value))),
+      accentPattern: options.accentPattern.length > 0 ? options.accentPattern : [1.35, 1, 1, 1],
+      beatGainDb: 0,
+      beatRenderMode: options.beatRenderMode,
+      beatOriginalBpm: options.beatOriginalBpm,
+      metronomeBpm: options.metronomeBpm,
+      sampleRate: 48000,
+      channels: 2
+    },
+    ffmpegPath
+  );
 }
 
 async function renderSingleToFile(
@@ -809,7 +753,7 @@ export async function renderSinglePreviewPayload(
       {
         ...previewPlan,
         format: 'mp3',
-        normalizeLoudness: false
+        normalizeLoudness: mode === 'original' ? false : previewPlan.normalizeLoudness
       },
       outputPath,
       PREVIEW_BITRATE_KBPS
@@ -842,7 +786,7 @@ export async function renderMedleyPreviewPayload(
       {
         ...previewPlan,
         format: 'mp3',
-        normalizeLoudness: false
+        normalizeLoudness: previewPlan.normalizeLoudness
       },
       outputPath,
       PREVIEW_BITRATE_KBPS
@@ -944,7 +888,7 @@ export async function exportMedley(
 ): Promise<string> {
   const outputDir = plan.outputDir || app.getPath('documents');
   ensureDir(outputDir);
-  const outputPath = path.join(outputDir, `beatstride_medley.${plan.format}`);
+  const outputPath = path.join(outputDir, `${sanitizeFileName(plan.outputBaseName)}.${plan.format}`);
   await renderMedleyToFile(
     ffmpegPath,
     plan,
