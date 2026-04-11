@@ -11,6 +11,8 @@ import { useAppSettingsStore } from '@renderer/stores/appSettingsStore';
 
 export type PreviewMode = 'original' | 'processed' | 'metronome';
 export type PreviewTarget = 'single' | 'medley';
+export const PREVIEW_SPECIAL_LABEL_MEDLEY = '__preview-medley__';
+export const PREVIEW_SPECIAL_LABEL_GAP = '__preview-gap__';
 interface PlaybackStartOptions {
   startPreviewMs?: number;
 }
@@ -829,7 +831,7 @@ async function runGapSegment(
       set({
         isPlaying: true,
         playingTrackId: null,
-        currentLabel: '间隔',
+        currentLabel: PREVIEW_SPECIAL_LABEL_GAP,
         currentTimeMs: baseMs + elapsedMs
       });
 
@@ -1097,7 +1099,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
         const playbackSourcePath = await resolvePreparedAudioSource(playbackPayload);
         pushDebug(set, `串烧预览音频已就绪 | ${playbackPayload.fileName}`);
         const segment = createRenderedSegment({
-          label: '串烧试听',
+          label: PREVIEW_SPECIAL_LABEL_MEDLEY,
           previewDurationMs: medleyPlan.durationMs,
           sourceFilePath: playbackSourcePath,
           beatTimesMs: [],
@@ -1116,7 +1118,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
                   previewTimeMs >= clip.timelineStartMs && previewTimeMs < clip.timelineEndMs
               ) ?? medleyPlan.clips.at(-1);
             if (!currentClip) {
-              return '串烧试听';
+              return PREVIEW_SPECIAL_LABEL_MEDLEY;
             }
             const index = medleyPlan.clips.findIndex(
               (clip) => clip.track.trackId === currentClip.track.trackId
@@ -1319,7 +1321,7 @@ export const usePlaybackStore = create<PlaybackState>((set, get) => ({
           await runGapSegment(
             {
               kind: 'gap',
-              label: '间隔',
+              label: PREVIEW_SPECIAL_LABEL_GAP,
               trackId: null,
               previewDurationMs: segment.durationMs
             },

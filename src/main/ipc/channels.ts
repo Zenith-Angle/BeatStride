@@ -29,5 +29,6 @@ export const IPC_CHANNELS = {
   exportMedley: 'export:medley',
   exportProgress: 'export:progress',
   exportLog: 'export:log',
-  menuAction: 'menu:action'
+  menuAction: 'menu:action',
+  menuExecute: 'menu:execute'
 } as const;

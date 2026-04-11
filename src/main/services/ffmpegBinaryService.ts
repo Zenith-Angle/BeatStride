@@ -4,62 +4,141 @@ import { app } from 'electron';
 import type { FfmpegBinaryConfig } from '@shared/types';
 import { getPlatformExeName } from '@shared/utils/platform';
 
-interface BinaryCandidates {
-  ffmpegCandidates: string[];
-  ffprobeCandidates: string[];
-}
-
-function getBinaryCandidates(overrides?: {
+interface DetectOptions {
   ffmpegPath?: string;
   ffprobePath?: string;
-}): BinaryCandidates {
-  const appPath = app.getAppPath();
-  const resourcesPath = process.resourcesPath;
-  const ffmpegName = getPlatformExeName('ffmpeg');
-  const ffprobeName = getPlatformExeName('ffprobe');
+  autoDetect?: boolean;
+}
 
-  const defaults = [
+interface ResolvedPair {
+  ffmpegPath: string;
+  ffprobePath: string;
+  message: string;
+}
+
+function getResourceDirs(): string[] {
+  const appPath = app.getAppPath();
+  return [
     path.join(appPath, 'resources', 'ffmpeg'),
     path.join(appPath, 'ffmpeg'),
-    path.join(resourcesPath, 'ffmpeg')
+    path.join(process.resourcesPath, 'ffmpeg')
   ];
-
-  const ffmpegCandidates = [
-    overrides?.ffmpegPath,
-    ...defaults.map((dir) => path.join(dir, ffmpegName))
-  ].filter(Boolean) as string[];
-
-  const ffprobeCandidates = [
-    overrides?.ffprobePath,
-    ...defaults.map((dir) => path.join(dir, ffprobeName))
-  ].filter(Boolean) as string[];
-
-  return { ffmpegCandidates, ffprobeCandidates };
 }
 
-function pickExisting(candidates: string[]): string {
-  for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
-      return candidate;
+function exists(targetPath?: string): targetPath is string {
+  if (!targetPath) {
+    return false;
+  }
+  return fs.existsSync(targetPath);
+}
+
+function dedupe(items: Array<string | undefined | null>): string[] {
+  return [...new Set(items.filter((item): item is string => Boolean(item)))];
+}
+
+function resolvePair(
+  ffmpegCandidates: string[],
+  ffprobeCandidates: string[],
+  message: string
+): ResolvedPair | null {
+  for (const ffmpegPath of ffmpegCandidates) {
+    if (!exists(ffmpegPath)) {
+      continue;
+    }
+    for (const ffprobePath of ffprobeCandidates) {
+      if (exists(ffprobePath)) {
+        return { ffmpegPath, ffprobePath, message };
+      }
     }
   }
-  return '';
+  return null;
 }
 
-export function detectFfmpegBinaries(overrides?: {
-  ffmpegPath?: string;
-  ffprobePath?: string;
-}): FfmpegBinaryConfig {
-  const { ffmpegCandidates, ffprobeCandidates } = getBinaryCandidates(overrides);
-  const ffmpegPath = pickExisting(ffmpegCandidates);
-  const ffprobePath = pickExisting(ffprobeCandidates);
-  const available = Boolean(ffmpegPath && ffprobePath);
+function getWindowsCommonDirs(): string[] {
+  if (process.platform !== 'win32') {
+    return [];
+  }
+
+  return dedupe([
+    'C:\\ffmpeg\\bin',
+    'C:\\Program Files\\ffmpeg\\bin',
+    'C:\\Program Files (x86)\\ffmpeg\\bin',
+    process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'scoop', 'shims') : undefined,
+    process.env.ProgramData ? path.join(process.env.ProgramData, 'chocolatey', 'bin') : undefined,
+    process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links')
+      : undefined
+  ]);
+}
+
+function getPathDirs(): string[] {
+  const delimiter = process.platform === 'win32' ? ';' : ':';
+  return dedupe((process.env.PATH ?? '').split(delimiter));
+}
+
+function mapDirsToBinaryPaths(dirs: string[], binaryName: string): string[] {
+  return dirs.map((dirPath) => path.join(dirPath, binaryName));
+}
+
+function detectPair(options?: DetectOptions): ResolvedPair | null {
+  const ffmpegName = getPlatformExeName('ffmpeg');
+  const ffprobeName = getPlatformExeName('ffprobe');
+  const resourceDirs = getResourceDirs();
+
+  const savedPair = resolvePair(
+    dedupe([options?.ffmpegPath]),
+    dedupe([options?.ffprobePath]),
+    'detected_saved_paths'
+  );
+  if (savedPair) {
+    return savedPair;
+  }
+
+  const resourcePair = resolvePair(
+    mapDirsToBinaryPaths(resourceDirs, ffmpegName),
+    mapDirsToBinaryPaths(resourceDirs, ffprobeName),
+    'detected_resources'
+  );
+  if (resourcePair) {
+    return resourcePair;
+  }
+
+  if (!options?.autoDetect) {
+    return null;
+  }
+
+  if (process.platform === 'win32') {
+    const commonDirs = getWindowsCommonDirs();
+    const commonDirPair = resolvePair(
+      mapDirsToBinaryPaths(commonDirs, ffmpegName),
+      mapDirsToBinaryPaths(commonDirs, ffprobeName),
+      'detected_common_dirs'
+    );
+    if (commonDirPair) {
+      return commonDirPair;
+    }
+  }
+
+  const pathPair = resolvePair(
+    mapDirsToBinaryPaths(getPathDirs(), ffmpegName),
+    mapDirsToBinaryPaths(getPathDirs(), ffprobeName),
+    'detected_path_env'
+  );
+  if (pathPair) {
+    return pathPair;
+  }
+
+  return null;
+}
+
+export function detectFfmpegBinaries(options?: DetectOptions): FfmpegBinaryConfig {
+  const detectedPair = detectPair(options);
 
   return {
-    ffmpegPath,
-    ffprobePath,
-    available,
+    ffmpegPath: detectedPair?.ffmpegPath ?? '',
+    ffprobePath: detectedPair?.ffprobePath ?? '',
+    available: Boolean(detectedPair),
     lastCheckedAt: new Date().toISOString(),
-    message: available ? 'ok' : 'ffmpeg_or_ffprobe_missing'
+    message: detectedPair?.message ?? 'ffmpeg_or_ffprobe_missing'
   };
 }

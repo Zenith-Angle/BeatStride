@@ -27,7 +27,25 @@ export type MenuActionPayload =
   | 'project:open'
   | 'project:save'
   | 'project:saveAs'
+  | 'app:settings'
   | `about:${string}`;
+
+export type MenuCommandPayload =
+  | 'app:quit'
+  | 'edit:undo'
+  | 'edit:redo'
+  | 'edit:cut'
+  | 'edit:copy'
+  | 'edit:paste'
+  | 'edit:selectAll'
+  | 'view:reload'
+  | 'view:forceReload'
+  | 'view:toggleDevTools'
+  | 'view:resetZoom'
+  | 'view:zoomIn'
+  | 'view:zoomOut'
+  | 'view:toggleFullscreen'
+  | 'help:about';
 
 export interface BeatStrideApi {
   getSettings(): Promise<AppSettings>;
@@ -35,6 +53,7 @@ export interface BeatStrideApi {
   checkFfmpeg(overrides?: {
     ffmpegPath?: string;
     ffprobePath?: string;
+    autoDetect?: boolean;
   }): Promise<FfmpegBinaryConfig>;
   selectAudioFiles(): Promise<string[]>;
   selectAudioFolder(): Promise<string[]>;
@@ -104,6 +123,7 @@ export interface BeatStrideApi {
   }): Promise<string>;
   onExportProgress(listener: (payload: ExportProgressPayload) => void): () => void;
   onMenuAction(listener: (payload: MenuActionPayload) => void): () => void;
+  executeMenuCommand(command: MenuCommandPayload): Promise<boolean>;
   openPath(targetPath: string): Promise<boolean>;
   getPathForDroppedFile(file: File): string;
 }

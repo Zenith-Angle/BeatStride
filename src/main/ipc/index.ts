@@ -1,6 +1,7 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { MenuCommandPayload } from '@shared/ipc';
 import type {
   MixTuningSettings,
   MedleyExportPlan,
@@ -67,6 +68,72 @@ export function registerIpcHandlers(): void {
     }
     await shell.openPath(targetPath);
     return true;
+  });
+
+  ipcMain.handle(IPC_CHANNELS.menuExecute, async (_, command: MenuCommandPayload) => {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+
+    if (command === 'app:quit') {
+      app.quit();
+      return true;
+    }
+
+    if (!window || window.isDestroyed()) {
+      return false;
+    }
+
+    const { webContents } = window;
+
+    switch (command) {
+      case 'edit:undo':
+        webContents.undo();
+        return true;
+      case 'edit:redo':
+        webContents.redo();
+        return true;
+      case 'edit:cut':
+        webContents.cut();
+        return true;
+      case 'edit:copy':
+        webContents.copy();
+        return true;
+      case 'edit:paste':
+        webContents.paste();
+        return true;
+      case 'edit:selectAll':
+        webContents.selectAll();
+        return true;
+      case 'view:reload':
+        webContents.reload();
+        return true;
+      case 'view:forceReload':
+        webContents.reloadIgnoringCache();
+        return true;
+      case 'view:toggleDevTools':
+        if (webContents.isDevToolsOpened()) {
+          webContents.closeDevTools();
+        } else {
+          webContents.openDevTools({ mode: 'detach' });
+        }
+        return true;
+      case 'view:resetZoom':
+        webContents.setZoomLevel(0);
+        return true;
+      case 'view:zoomIn':
+        webContents.setZoomLevel(Math.min(3, webContents.getZoomLevel() + 0.5));
+        return true;
+      case 'view:zoomOut':
+        webContents.setZoomLevel(Math.max(-3, webContents.getZoomLevel() - 0.5));
+        return true;
+      case 'view:toggleFullscreen':
+        window.setFullScreen(!window.isFullScreen());
+        return true;
+      case 'help:about':
+        webContents.send(IPC_CHANNELS.menuAction, `about:${app.getName()} ${app.getVersion()}`);
+        return true;
+      default:
+        return false;
+    }
   });
 
   ipcMain.handle(IPC_CHANNELS.dialogSelectAudioFiles, async () => {

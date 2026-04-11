@@ -38,13 +38,18 @@ export function AlignmentPanel({
           {Math.round(aligned.targetBpm)} BPM
         </span>
         <span>
-          拍号 {track.timeSignature} · 识别 {Math.round(track.analysisConfidence * 100)}%
+          {t('alignment.timeSignature')}
+          {track.timeSignature} · {t('alignment.detectConfidence')}
+          {Math.round(track.analysisConfidence * 100)}%
         </span>
-        <span>自动映射: {aligned.harmonicMode}</span>
+        <span>
+          {t('alignment.autoMapping')}
+          {aligned.harmonicMode}
+        </span>
       </div>
       <div className="properties-grid">
         <label className="field inline">
-          <span>自动首拍后偏移</span>
+          <span>{t('alignment.autoDownbeatAfterSpeed')}</span>
           <div className="alignment-readonly-value">
             {Math.round(aligned.downbeatOffsetMsAfterSpeed)} ms
           </div>
@@ -78,11 +83,11 @@ export function AlignmentPanel({
       </div>
       <div className="alignment-action-grid compact">
         <button onClick={() => void onAnalyzeTempo?.()} disabled={analyzingTempo}>
-          {analyzingTempo ? '分析中...' : '重新分析并自动对齐'}
+          {analyzingTempo ? t('common.loading') : t('alignment.reanalyze')}
         </button>
       </div>
       <p className="muted alignment-result">
-        自动分析会更新 BPM、拍号和首拍偏移；如果还有细小误差，再手动改上面两个偏移。
+        {t('alignment.resultHint')}
       </p>
     </div>
   );

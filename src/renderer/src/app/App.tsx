@@ -6,7 +6,8 @@ import {
   buildSingleTrackPreviewPlan
 } from '@shared/services/previewPlanService';
 import { getWorkspaceTracks } from '@shared/services/workspaceOrderService';
-import type { SingleTrackExportPlan, TrackProxyStatus } from '@shared/types';
+import type { MenuCommandPayload } from '@shared/ipc';
+import type { SingleTrackExportPlan, ThemeMode, TrackProxyStatus } from '@shared/types';
 import { I18nProvider } from '@renderer/features/i18n/I18nProvider';
 import { ThemeProvider } from '@renderer/features/theme/ThemeProvider';
 import { useAppSettingsStore } from '@renderer/stores/appSettingsStore';
@@ -15,7 +16,10 @@ import {
   stopProjectAutosave,
   useProjectStore
 } from '@renderer/stores/projectStore';
-import { usePlaybackStore } from '@renderer/stores/playbackStore';
+import {
+  PREVIEW_SPECIAL_LABEL_MEDLEY,
+  usePlaybackStore
+} from '@renderer/stores/playbackStore';
 import { useExportStore } from '@renderer/stores/exportStore';
 import { TitleBar } from '@renderer/components/TitleBar';
 import { WelcomePage } from '@renderer/components/WelcomePage';
@@ -71,7 +75,27 @@ async function mapWithConcurrency<TInput, TResult>(
   return results;
 }
 
-function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
+interface EditorContentProps {
+  developerMode: boolean;
+  onCreateProject: () => void;
+  onOpenProject: () => void;
+  onSaveProject: () => void;
+  onSaveProjectAs: () => void;
+  onOpenSettings: () => void;
+  onExecuteMenuCommand: (command: MenuCommandPayload) => void;
+  onSetTheme: (theme: ThemeMode) => void;
+}
+
+function EditorContent({
+  developerMode,
+  onCreateProject,
+  onOpenProject,
+  onSaveProject,
+  onSaveProjectAs,
+  onOpenSettings,
+  onExecuteMenuCommand,
+  onSetTheme
+}: EditorContentProps) {
   const { t } = useI18n();
   const projectStore = useProjectStore();
   const playbackStore = usePlaybackStore();
@@ -239,14 +263,14 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const formatProxyGenerationTitle = () => {
     if (!generatingTrackProxies) {
-      return '为勾选歌曲生成可复用代理文件';
+      return t('app.proxyTooltipIdle');
     }
     const { completed, total, failed, currentTrackName, cancelRequested } = proxyGenerationState;
     return [
-      `进度: ${completed}/${total}`,
-      `失败: ${failed}`,
-      currentTrackName ? `当前: ${currentTrackName}` : '',
-      cancelRequested ? '已请求停止，当前歌曲处理完后结束' : '再次点击可停止生成'
+      `${t('app.proxyProgressPrefix')}${completed}/${total}`,
+      `${t('app.proxyFailedPrefix')}${failed}`,
+      currentTrackName ? `${t('app.proxyCurrentPrefix')}${currentTrackName}` : '',
+      cancelRequested ? t('app.proxyStoppingHint') : t('app.proxyStopHint')
     ]
       .filter(Boolean)
       .join('\n');
@@ -286,7 +310,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
       }
     ).generateTrackProxies;
     if (typeof generateTrackProxiesApi !== 'function') {
-      alert('当前进程还没有加载新的代理文件接口，请完全重启应用后再试。');
+      alert(t('app.proxyApiMissing'));
       return;
     }
     const checkedWorkTracks = workspaceTracks.filter((track) =>
@@ -309,7 +333,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
       currentProject = useProjectStore.getState().project;
     }
     if (!currentProject?.meta.filePath) {
-      alert('请先保存项目，再生成代理文件。');
+      alert(t('app.proxySaveRequired'));
       return;
     }
     const savedProject = currentProject;
@@ -384,9 +408,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
       const proxyDir = results[0]?.filePath.replace(/\\[^\\]+$/, '') ?? '';
       const cancelled = proxyGenerationCancelRef.current;
       alert(
-        `代理文件处理${cancelled ? '已停止' : '完成'}：新增 ${createdCount} 个，复用 ${reusedCount} 个，失败 ${failures.length} 个。${
-          proxyDir ? `\n目录：${proxyDir}` : ''
-        }${failures.length > 0 ? `\n失败示例：${failures.slice(0, 3).join('；')}` : ''}`
+        `${cancelled ? t('app.proxyStopped') : t('app.proxyCompleted')} ${t('app.proxyCreatedPrefix')}${createdCount}${t('app.proxyComma')}${t('app.proxyReusedPrefix')}${reusedCount}${t('app.proxyComma')}${t('app.proxyFailedPrefixInline')}${failures.length}${proxyDir ? `\n${t('app.proxyDirectoryPrefix')}${proxyDir}` : ''}${failures.length > 0 ? `\n${t('app.proxyFailureExamplePrefix')}${failures.slice(0, 3).join('；')}` : ''}`
       );
     } catch (error) {
       alert(error instanceof Error ? error.message : String(error));
@@ -489,7 +511,7 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
     const nextLabel =
       currentClip && clipIndex >= 0
         ? `${clipIndex + 1}. ${currentClip.track.trackName}`
-        : '串烧试听';
+        : PREVIEW_SPECIAL_LABEL_MEDLEY;
     const nextTrackId = currentClip?.track.trackId ?? null;
     logSeekApp({
       status: 'medley-clamped',
@@ -692,11 +714,39 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
     return <div />;
   }
 
+  const leftStatusLabel = importing
+    ? t('status.analyzingBpm')
+    : generatingTrackProxies
+      ? `${t('status.generatingProxyPrefix')}${proxyGenerationState.completed}/${proxyGenerationState.total}`
+      : projectStore.dirty
+        ? t('status.processing')
+        : t('status.ready');
+  const leftStatusTone = importing || generatingTrackProxies ? 'busy' : projectStore.dirty ? 'warm' : 'idle';
+  const exportStatus = exportStore.jobs[0]?.status;
+  const rightStatusLabel =
+    exportStatus === 'running'
+      ? t('export.running')
+      : exportStatus === 'completed'
+        ? t('export.completed')
+        : exportStatus === 'failed'
+          ? t('export.failed')
+          : t('status.ready');
+  const rightStatusTone =
+    exportStatus === 'running' ? 'busy' : exportStatus === 'failed' ? 'danger' : exportStatus === 'completed' ? 'success' : 'idle';
+
   return (
     <>
       <TitleBar
+        mode="editor"
         projectName={project.meta.name}
+        developerMode={developerMode}
+        onCreateProject={onCreateProject}
+        onOpenProject={onOpenProject}
+        onSaveProject={onSaveProject}
+        onSaveProjectAs={onSaveProjectAs}
         onOpenSettings={onOpenSettings}
+        onExecuteMenuCommand={onExecuteMenuCommand}
+        onSetTheme={onSetTheme}
         onExport={() => setShowExport(true)}
         onImport={() => void handleImportFiles()}
         onImportFolder={() => void handleImportFolder()}
@@ -801,9 +851,9 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
             proxyGenerationButtonLabel={
               generatingTrackProxies
                 ? proxyGenerationState.cancelRequested
-                  ? '停止中...'
-                  : '停止生成'
-                : '生成代理文件'
+                  ? t('app.proxyStoppingShort')
+                  : t('app.proxyStopShort')
+                : t('app.proxyGenerateShort')
             }
             proxyGenerationButtonTitle={formatProxyGenerationTitle()}
             onRemoveCheckedFromQueue={() =>
@@ -832,17 +882,11 @@ function EditorContent({ onOpenSettings }: { onOpenSettings: () => void }) {
       {showExport && project && (
         <ExportPanel project={project} selectedTrack={selectedTrack} onClose={() => setShowExport(false)} />
       )}
-      <div className="status-chip status-chip-left">
-        {importing
-          ? '分析 BPM 中'
-          : generatingTrackProxies
-            ? `生成代理文件 ${proxyGenerationState.completed}/${proxyGenerationState.total}`
-            : projectStore.dirty
-              ? t('status.processing')
-              : t('status.ready')}
+      <div className={`status-chip status-chip-left ${leftStatusTone}`}>
+        {leftStatusLabel}
       </div>
-      <div className="status-chip status-chip-right">
-        {exportStore.jobs[0]?.status ?? t('status.ready')}
+      <div className={`status-chip status-chip-right ${rightStatusTone}`}>
+        {rightStatusLabel}
       </div>
     </>
   );
@@ -899,19 +943,30 @@ export function App() {
         void projectStore.saveProjectAs();
         return;
       }
+      if (action === 'app:settings') {
+        setShowSettings(true);
+        return;
+      }
       if (action.startsWith('about:')) {
         alert(action.replace('about:', ''));
       }
     });
     return off;
-  }, [projectStore.project]);
+  }, [projectStore]);
 
   const pageMode: PageMode = projectStore.project ? 'editor' : 'welcome';
+  const handleCreateProject = () => void projectStore.createProject();
+  const handleOpenProject = () => void projectStore.openProject();
+  const handleSaveProject = () => void projectStore.saveProject();
+  const handleSaveProjectAs = () => void projectStore.saveProjectAs();
+  const handleSetTheme = (theme: ThemeMode) => void settingsStore.setTheme(theme);
+  const handleExecuteMenuCommand = (command: MenuCommandPayload) =>
+    void window.beatStride.executeMenuCommand(command);
 
   return (
     <ThemeProvider
       theme={settingsStore.settings.theme}
-      onThemeChange={(theme) => void settingsStore.setTheme(theme)}
+      onThemeChange={handleSetTheme}
     >
       <I18nProvider
         language={settingsStore.settings.language}
@@ -920,15 +975,37 @@ export function App() {
         <div className={`app-shell ${pageMode === 'welcome' ? 'welcome-mode' : ''}`}>
           {bootError && <div className="boot-error">{bootError}</div>}
           {pageMode === 'welcome' ? (
-            <WelcomePage
-              settings={settingsStore.settings}
-              onCreateProject={() => void projectStore.createProject()}
-              onOpenProject={() => void projectStore.openProject()}
-              onRestoreRecovery={() => void projectStore.loadRecovery()}
-              onOpenRecent={(path) => void projectStore.openProjectByPath(path)}
-            />
+            <>
+              <TitleBar
+                mode="welcome"
+                developerMode={settingsStore.settings.developerMode}
+                onCreateProject={handleCreateProject}
+                onOpenProject={handleOpenProject}
+                onSaveProject={handleSaveProject}
+                onSaveProjectAs={handleSaveProjectAs}
+                onOpenSettings={() => setShowSettings(true)}
+                onExecuteMenuCommand={handleExecuteMenuCommand}
+                onSetTheme={handleSetTheme}
+              />
+              <WelcomePage
+                settings={settingsStore.settings}
+                onCreateProject={handleCreateProject}
+                onOpenProject={handleOpenProject}
+                onRestoreRecovery={() => void projectStore.loadRecovery()}
+                onOpenRecent={(path) => void projectStore.openProjectByPath(path)}
+              />
+            </>
           ) : (
-            <EditorContent onOpenSettings={() => setShowSettings(true)} />
+            <EditorContent
+              developerMode={settingsStore.settings.developerMode}
+              onCreateProject={handleCreateProject}
+              onOpenProject={handleOpenProject}
+              onSaveProject={handleSaveProject}
+              onSaveProjectAs={handleSaveProjectAs}
+              onOpenSettings={() => setShowSettings(true)}
+              onExecuteMenuCommand={handleExecuteMenuCommand}
+              onSetTheme={handleSetTheme}
+            />
           )}
           {showSettings && <SettingsPage onClose={() => setShowSettings(false)} />}
         </div>

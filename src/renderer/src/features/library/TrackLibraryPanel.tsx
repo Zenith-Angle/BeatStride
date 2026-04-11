@@ -39,11 +39,11 @@ export function TrackLibraryPanel({
                     checked={allChecked}
                     onChange={(event) => onToggleAll(event.target.checked)}
                   />
-                  <span>全选</span>
+                  <span>{t('common.selectAll')}</span>
                 </label>
-                <strong className="section-title">待加载区</strong>
+                <strong className="section-title">{t('library.pendingArea')}</strong>
                 <button className="wire-btn" onClick={onIncludeCheckedInMedley}>
-                  加入列表
+                  {t('library.addToQueue')}
                 </button>
               </div>
               <div className="left-song-list">
@@ -77,7 +77,8 @@ export function TrackLibraryPanel({
                           {t('library.duration')}: {formatMs(track.durationMs, language)}
                         </div>
                         <div className="muted track-item-status">
-                          状态: {track.exportEnabled ? '已加入列表' : '未加入列表'}
+                          {t('library.trackStatus')}
+                          {track.exportEnabled ? t('library.statusQueued') : t('library.statusPending')}
                         </div>
                       </div>
                     );
@@ -91,7 +92,7 @@ export function TrackLibraryPanel({
                 disabled={checkedTrackIds.length === 0}
                 onClick={onRemoveChecked}
               >
-                移除列表
+                {t('library.removeFromQueue')}
               </button>
             </div>
           </div>

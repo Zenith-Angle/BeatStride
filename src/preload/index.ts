@@ -51,6 +51,7 @@ const api: BeatStrideApi = {
     ipcRenderer.on(IPC_CHANNELS.menuAction, wrapped);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.menuAction, wrapped);
   },
+  executeMenuCommand: (command) => ipcRenderer.invoke(IPC_CHANNELS.menuExecute, command),
   openPath: (targetPath) => ipcRenderer.invoke(IPC_CHANNELS.appOpenExternal, targetPath),
   getPathForDroppedFile: (file) => webUtils.getPathForFile(file)
 };

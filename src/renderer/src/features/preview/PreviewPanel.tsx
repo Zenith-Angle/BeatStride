@@ -28,7 +28,13 @@ import type { AudioWaveformData, ProjectFile, Track, TrackProxyStatus } from '@s
 import { buildProjectPreviewPlan, buildSingleTrackPreviewPlan } from '@shared/services/previewPlanService';
 import { getWorkspaceTracks } from '@shared/services/workspaceOrderService';
 import { formatMs } from '@shared/utils/time';
-import type { PreviewMode, PreviewTarget } from '@renderer/stores/playbackStore';
+import {
+  PREVIEW_SPECIAL_LABEL_GAP,
+  PREVIEW_SPECIAL_LABEL_MEDLEY,
+  type PreviewMode,
+  type PreviewTarget
+} from '@renderer/stores/playbackStore';
+import { useI18n } from '@renderer/features/i18n/I18nProvider';
 
 interface PreviewPanelProps {
   project: ProjectFile;
@@ -151,6 +157,7 @@ export function PreviewPanel({
   proxyGenerationButtonTitle,
   onRemoveCheckedFromQueue
 }: PreviewPanelProps) {
+  const { t } = useI18n();
   const EDGE_AUTO_SCROLL_THRESHOLD_PX = 44;
   const EDGE_AUTO_SCROLL_HOLD_MS = 220;
   const EDGE_AUTO_SCROLL_MIN_STEP_PX = 4;
@@ -198,12 +205,12 @@ export function PreviewPanel({
   type SeekCommitSource = 'window-release' | 'range-release' | 'change-direct';
   const getProxyStatusLabel = (proxyStatus: TrackProxyStatus) =>
     proxyStatus === 'ready'
-      ? '代理已生成'
+      ? t('preview.proxyReady')
       : proxyStatus === 'generating'
-        ? '代理生成中'
+        ? t('preview.proxyGenerating')
         : proxyStatus === 'stale'
-          ? '代理已过期'
-          : '未生成代理';
+          ? t('preview.proxyStale')
+          : t('preview.proxyMissing');
   const queueTracks = getWorkspaceTracks(project.tracks);
   const queuePlans = buildProjectPreviewPlan(project);
   const selectedPlan = selectedTrack ? buildSingleTrackPreviewPlan(selectedTrack, project) : null;
@@ -219,11 +226,15 @@ export function PreviewPanel({
   const canGenerateProxy =
     queueCheckedCount > 0 || Boolean(selectedTrack && selectedTrack.exportEnabled);
   const currentModeLabel =
-    mode === 'original' ? '原曲对比' : mode === 'processed' ? '变速试听' : '节拍器叠加';
-  const currentTargetLabel = target === 'single' ? '单曲' : '串烧';
+    mode === 'original'
+      ? t('preview.modeOriginal')
+      : mode === 'processed'
+        ? t('preview.modeProcessed')
+        : t('preview.modeMetronome');
+  const currentTargetLabel = target === 'single' ? t('preview.targetSingle') : t('preview.targetMedley');
   const canControlPreview = target === 'single' ? Boolean(selectedTrack) : queueTracks.length > 0;
   const canTogglePlayback = isPlaying || canControlPreview;
-  const playbackToggleLabel = isPlaying ? '暂停' : '播放';
+  const playbackToggleLabel = isPlaying ? t('preview.pause') : t('preview.play');
   const previewDurationMs = Math.max(1, target === 'single' ? singleDurationMs : medleyDurationMs);
   const previewPositionMs = Math.max(
     0,
@@ -234,11 +245,17 @@ export function PreviewPanel({
     Math.min(100, (previewPositionMs / Math.max(1, previewDurationMs)) * 100)
   )}%`;
   const volumePercent = `${Math.round(volume * 100)}%`;
+  const resolvedCurrentLabel =
+    currentLabel === PREVIEW_SPECIAL_LABEL_MEDLEY
+      ? t('preview.currentLabelMedley')
+      : currentLabel === PREVIEW_SPECIAL_LABEL_GAP
+        ? t('preview.currentLabelGap')
+        : currentLabel;
   const previewStatusLabel = isPlaying
-    ? currentLabel || '试听中'
+    ? resolvedCurrentLabel || t('preview.statusPlaying')
     : previewPositionMs > 0
-      ? '已暂停'
-      : '待命';
+      ? t('preview.statusPaused')
+      : t('preview.statusIdle');
   const previewStatusTone =
     isPlaying ? 'playing' : previewPositionMs > 0 ? 'paused' : 'idle';
   const PreviewVolumeIcon = volume === 0 ? VolumeX : volume < 0.45 ? Volume1 : Volume2;
@@ -291,50 +308,55 @@ export function PreviewPanel({
         ? previewPositionMs / Math.max(0.0001, selectedPlan.speedRatio)
         : previewPositionMs
       : null;
-  const visualHeaderTitle = selectedTrack ? selectedTrack.name : '先从工作区选择一首歌';
+  const visualHeaderTitle = selectedTrack ? selectedTrack.name : t('preview.visualTitleEmpty');
   const visualHeaderSubtitle = !selectedTrack
     ? target === 'medley' && queueTracks.length > 0
-      ? '先在工作区点选一首歌，这里会显示它的简化波形、首拍线和节拍器落点。'
-      : '选中歌曲后，就能直接观察首拍和节拍器的相对位置，而不是只看数字。'
+      ? t('preview.visualSubtitleMedleyEmpty')
+      : t('preview.visualSubtitleEmpty')
     : target === 'medley'
-      ? '当前显示选中歌曲的处理时间轴，串烧试听不会改变这里的校准参考。'
+      ? t('preview.visualSubtitleMedleySelected')
       : mode === 'original'
-        ? '看明显鼓点峰值是否稳定贴近节拍线；按住 Ctrl + 滚轮可以放大查看细节。'
-        : selectedTrackProxyStatus === 'ready'
-          ? '橙线是音乐首拍，青线是节拍器起点；看主要鼓点峰值是否跟着节拍线稳定重合。'
-          : '先看真实波形里的鼓点峰值是否贴线，确认后再生成代理或继续串烧试听。';
+        ? t('preview.visualSubtitleOriginal')
+        : '';
+  const visualHelpTooltip = selectedTrack
+    ? mode === 'original'
+      ? ''
+      : selectedTrackProxyStatus === 'ready'
+        ? t('preview.visualSubtitleProxyReady')
+        : t('preview.visualSubtitleProxyMissing')
+    : '';
   const visualMeta = selectedTrack
     ? [
         currentModeLabel,
         `${Math.round(selectedTrack.sourceBpm)} → ${selectedTargetBpm} BPM`,
         Math.abs(selectedTrack.metronomeOffsetMs) <= 12
-          ? '起点已基本对齐'
-          : `起点偏移 ${selectedTrack.metronomeOffsetMs > 0 ? '+' : ''}${selectedTrack.metronomeOffsetMs} ms`,
-        `首拍 ${selectedTrack.downbeatOffsetMs} ms`,
-        `节拍器 ${selectedTrack.metronomeOffsetMs} ms`
+          ? t('preview.offsetAligned')
+          : `${t('preview.offsetDelta')}${selectedTrack.metronomeOffsetMs > 0 ? '+' : ''}${selectedTrack.metronomeOffsetMs} ms`,
+        `${t('preview.downbeatLabel')}${selectedTrack.downbeatOffsetMs} ms`,
+        `${t('preview.metronomeLabel')}${selectedTrack.metronomeOffsetMs} ms`
       ]
     : [
         currentTargetLabel,
         currentModeLabel,
-        queueTracks.length > 0 ? `${queueTracks.length} 首工作区` : '工作区为空',
-        `全局 ${Math.round(project.globalTargetBpm)} BPM`
+        queueTracks.length > 0 ? `${queueTracks.length} ${t('preview.queueCountSuffix')}` : t('preview.queueEmpty'),
+        `${t('preview.globalBpmLabel')}${Math.round(project.globalTargetBpm)} BPM`
       ];
   const auditionViewIndex = auditionView === 'controls' ? 0 : 1;
   const auditionViews = [
     {
       key: 'controls' as const,
-      label: '试听控制'
+      label: t('preview.controlsTab')
     },
     {
       key: 'visualizer' as const,
-      label: '节拍校准'
+      label: t('preview.visualizerTab')
     }
   ];
   const targetControls = [
     {
       key: 'single',
-      shortLabel: '单曲',
-      label: '单曲试听',
+      shortLabel: t('preview.targetSingle'),
+      label: t('preview.targetSingleLabel'),
       icon: Disc3,
       active: target === 'single',
       disabled: false,
@@ -342,8 +364,8 @@ export function PreviewPanel({
     },
     {
       key: 'medley',
-      shortLabel: '串烧',
-      label: '串烧试听',
+      shortLabel: t('preview.targetMedley'),
+      label: t('preview.targetMedleyLabel'),
       icon: LayoutList,
       active: target === 'medley',
       disabled: false,
@@ -353,8 +375,8 @@ export function PreviewPanel({
   const modeControls = [
     {
       key: 'processed',
-      shortLabel: '变速',
-      label: '变速试听',
+      shortLabel: t('preview.modeProcessedShort'),
+      label: t('preview.modeProcessed'),
       icon: Gauge,
       active: mode === 'processed',
       disabled: false,
@@ -362,8 +384,8 @@ export function PreviewPanel({
     },
     {
       key: 'metronome',
-      shortLabel: '节拍器',
-      label: '添加节拍器',
+      shortLabel: t('preview.modeMetronomeShort'),
+      label: t('preview.modeMetronome'),
       icon: AlarmClock,
       active: mode === 'metronome',
       disabled: false,
@@ -371,8 +393,8 @@ export function PreviewPanel({
     },
     {
       key: 'original',
-      shortLabel: '原曲',
-      label: '原曲对比',
+      shortLabel: t('preview.modeOriginalShort'),
+      label: t('preview.modeOriginal'),
       icon: AudioWaveform,
       active: mode === 'original',
       disabled: target === 'medley',
@@ -1034,7 +1056,7 @@ export function PreviewPanel({
                   checked={allQueueChecked}
                   onChange={(event) => onToggleAllQueueChecked(event.target.checked)}
                 />
-                <span>全选</span>
+                <span>{t('common.selectAll')}</span>
               </label>
               <button
                 className="wire-btn"
@@ -1045,15 +1067,21 @@ export function PreviewPanel({
                 {proxyGenerationButtonLabel}
               </button>
             </div>
-            <strong className="section-title">工作区</strong>
+            <div className="preview-canvas-title-center">
+              <strong className="section-title">{t('preview.queueTitle')}</strong>
+            </div>
             <div className="preview-canvas-tools">
-              <span className="preview-canvas-count">共 {queueTracks.length} 首</span>
+              <span className="preview-canvas-count">
+                {t('preview.queueCountPrefix')}
+                {queueTracks.length}
+                {t('preview.queueCountUnit')}
+              </span>
               <button
                 className="wire-btn"
                 disabled={queueCheckedCount === 0}
                 onClick={onRemoveCheckedFromQueue}
               >
-                移除列表
+                {t('library.removeFromQueue')}
               </button>
             </div>
           </div>
@@ -1062,7 +1090,7 @@ export function PreviewPanel({
             className="preview-canvas-list"
           >
             {queueTracks.length === 0 ? (
-              <div className="preview-canvas-empty">将左侧勾选歌曲加入这里，形成串烧/试听顺序</div>
+              <div className="preview-canvas-empty">{t('preview.queueEmptyHint')}</div>
             ) : (
               queueTracks.map((track, index) => {
                 const active = playingTrackId === track.id;
@@ -1091,10 +1119,10 @@ export function PreviewPanel({
                           onClick={(event) => event.stopPropagation()}
                         />
                       </div>
-                      <strong>
+                      <strong className="preview-canvas-item-title">
                         {String(index + 1).padStart(2, '0')} {track.name}
                       </strong>
-                      <div className="muted">
+                      <div className="preview-canvas-item-meta muted">
                         {Math.round(track.sourceBpm)} → {Math.round(plan?.targetBpm ?? track.targetBpm ?? project.globalTargetBpm)} BPM
                       </div>
                     </div>
@@ -1119,7 +1147,7 @@ export function PreviewPanel({
 
         <div className="preview-audition-block">
           <div className="preview-audition-tabs">
-            <div className="preview-audition-tabs-track" role="tablist" aria-label="工作区界面切换">
+            <div className="preview-audition-tabs-track" role="tablist" aria-label={t('preview.tabAria')}>
               {auditionViews.map((view) => (
                 <button
                   key={view.key}
@@ -1144,8 +1172,8 @@ export function PreviewPanel({
                 <div className="preview-function-strip">
                   <div className="preview-icon-strip">
                     <div className="preview-toggle-group">
-                      <span className="preview-toggle-group-label">目标</span>
-                      <div className="preview-icon-cluster" role="group" aria-label="试听目标">
+                      <span className="preview-toggle-group-label">{t('preview.targetGroup')}</span>
+                      <div className="preview-icon-cluster" role="group" aria-label={t('preview.targetGroupAria')}>
                         {targetControls.map((control) => {
                           const Icon = control.icon;
                           return (
@@ -1168,8 +1196,8 @@ export function PreviewPanel({
                     </div>
                     <span className="preview-icon-divider" aria-hidden="true" />
                     <div className="preview-toggle-group">
-                      <span className="preview-toggle-group-label">模式</span>
-                      <div className="preview-icon-cluster" role="group" aria-label="试听模式">
+                      <span className="preview-toggle-group-label">{t('preview.modeGroup')}</span>
+                      <div className="preview-icon-cluster" role="group" aria-label={t('preview.modeGroupAria')}>
                         {modeControls.map((control) => {
                           const Icon = control.icon;
                           return (
@@ -1195,12 +1223,12 @@ export function PreviewPanel({
 
                 <div className="preview-transport">
                   <div className="preview-deck">
-                    <div className="preview-play-cluster compact" role="group" aria-label="播放控制">
+                    <div className="preview-play-cluster compact" role="group" aria-label={t('preview.transportAria')}>
                       <button
                         type="button"
                         className="transport-button transport-utility"
-                        aria-label="后退 10 秒"
-                        title="后退 10 秒"
+                        aria-label={t('preview.backTen')}
+                        title={t('preview.backTen')}
                         disabled={!canControlPreview}
                         onClick={() => handlePreviewStep(-10000)}
                       >
@@ -1219,8 +1247,8 @@ export function PreviewPanel({
                       <button
                         type="button"
                         className="transport-button transport-utility stop"
-                        aria-label="停止"
-                        title="停止"
+                        aria-label={t('preview.stop')}
+                        title={t('preview.stop')}
                         disabled={!canControlPreview || (!isPlaying && previewPositionMs <= 0)}
                         onClick={onStop}
                       >
@@ -1229,8 +1257,8 @@ export function PreviewPanel({
                       <button
                         type="button"
                         className="transport-button transport-utility"
-                        aria-label="前进 10 秒"
-                        title="前进 10 秒"
+                        aria-label={t('preview.forwardTen')}
+                        title={t('preview.forwardTen')}
                         disabled={!canControlPreview}
                         onClick={() => handlePreviewStep(10000)}
                       >
@@ -1247,7 +1275,7 @@ export function PreviewPanel({
                         min={0}
                         max={100}
                         value={Math.round(volume * 100)}
-                        aria-label="音量"
+                        aria-label={t('preview.volume')}
                         style={{ '--volume-percent': volumePercent } as CSSProperties}
                         onChange={(event) => onChangeVolume(Number(event.target.value) / 100)}
                       />
@@ -1264,7 +1292,7 @@ export function PreviewPanel({
                           max={previewDurationMs}
                           step={10}
                           value={previewPositionMs}
-                          aria-label="试听进度"
+                          aria-label={t('preview.progress')}
                           style={{ '--progress-percent': previewProgressPercent } as CSSProperties}
                           onPointerDown={startPreviewSeek}
                           onPointerUp={finishPreviewSeek}
@@ -1290,7 +1318,7 @@ export function PreviewPanel({
                   <div className="preview-visualizer-card">
                     <div className="preview-visualizer-header">
                       <div className="preview-visualizer-heading">
-                        <span className="preview-visualizer-kicker">节拍校准视图</span>
+                        <span className="preview-visualizer-kicker">{t('preview.visualizerKicker')}</span>
                         <strong className="preview-visualizer-title" title={visualHeaderTitle}>
                           {visualHeaderTitle}
                         </strong>
@@ -1308,11 +1336,25 @@ export function PreviewPanel({
                     {selectedTrack && selectedPlan ? (
                       <>
                         <div className="preview-visualizer-tools">
-                          <span className="preview-visualizer-hint">
-                            按住 Ctrl + 滚轮缩放，横向滚动查看细节。看鼓点峰值是否稳定贴近节拍线。
-                          </span>
+                          <div className="preview-visualizer-hint-wrap">
+                            <span className="preview-visualizer-hint">{t('preview.visualHint')}</span>
+                            {visualHelpTooltip ? (
+                              <span
+                                className="preview-visualizer-help"
+                                aria-label={visualHelpTooltip}
+                                title={visualHelpTooltip}
+                                tabIndex={0}
+                              >
+                                ?
+                                <span className="preview-visualizer-help-tooltip" role="tooltip">
+                                  {visualHelpTooltip}
+                                </span>
+                              </span>
+                            ) : null}
+                          </div>
                           <span className="preview-visualizer-zoom">
-                            缩放 {waveformZoom.toFixed(1)}x
+                            {t('preview.zoomPrefix')}
+                            {waveformZoom.toFixed(1)}x
                           </span>
                         </div>
 
@@ -1344,7 +1386,7 @@ export function PreviewPanel({
                                     className="preview-waveform-svg"
                                     viewBox={`0 0 ${WAVEFORM_VIEWBOX_WIDTH} ${WAVEFORM_VIEWBOX_HEIGHT}`}
                                     preserveAspectRatio="none"
-                                    aria-label="真实音频波形"
+                                    aria-label={t('preview.waveformAria')}
                                   >
                                     <path className="preview-waveform-fill" d={waveformAreaPath} />
                                     <path className="preview-waveform-stroke" d={waveformStrokePath} />
@@ -1357,13 +1399,14 @@ export function PreviewPanel({
                                     />
                                   </svg>
                                 ) : waveformState.status === 'loading' ? (
-                                  <div className="preview-waveform-status">正在生成真实波形...</div>
+                                  <div className="preview-waveform-status">{t('preview.waveformLoading')}</div>
                                 ) : waveformState.status === 'error' ? (
                                   <div className="preview-waveform-status error">
-                                    波形加载失败：{waveformState.error}
+                                    {t('preview.waveformError')}
+                                    {waveformState.error}
                                   </div>
                                 ) : (
-                                  <div className="preview-waveform-status">等待波形数据...</div>
+                                  <div className="preview-waveform-status">{t('preview.waveformIdle')}</div>
                                 )}
                               </div>
 
@@ -1403,7 +1446,7 @@ export function PreviewPanel({
                                   left: `${toPercent(selectedPlan.downbeatOffsetMsAfterSpeed, visualDurationMs)}%`
                                 }}
                               >
-                                首拍
+                                {t('preview.downbeatMarker')}
                               </span>
 
                               <span
@@ -1414,7 +1457,7 @@ export function PreviewPanel({
                                 className="preview-marker-label metronome"
                                 style={{ left: `${toPercent(selectedPlan.metronomeStartMs, visualDurationMs)}%` }}
                               >
-                                节拍器
+                                {t('preview.metronomeMarker')}
                               </span>
 
                               {visualCursorMs !== null && (
@@ -1427,7 +1470,8 @@ export function PreviewPanel({
                                     className="preview-marker-label playhead"
                                     style={{ left: `${toPercent(visualCursorMs, visualDurationMs)}%` }}
                                   >
-                                    播放头 {formatMs(visualCursorMs)}
+                                    {t('preview.playheadMarker')}
+                                    {formatMs(visualCursorMs)}
                                   </span>
                                 </>
                               )}
@@ -1438,30 +1482,30 @@ export function PreviewPanel({
                         <div className="preview-visualizer-legend">
                           <span className="preview-visualizer-legend-item">
                             <span className="preview-visualizer-legend-swatch waveform" />
-                            真实波形
+                            {t('preview.legendWaveform')}
                           </span>
                           <span className="preview-visualizer-legend-item">
                             <span className="preview-visualizer-legend-swatch bar" />
-                            小节线
+                            {t('preview.legendBar')}
                           </span>
                           <span className="preview-visualizer-legend-item">
                             <span className="preview-visualizer-legend-swatch minor" />
-                            节拍线
+                            {t('preview.legendMinor')}
                           </span>
                           <span className="preview-visualizer-legend-item">
                             <span className="preview-visualizer-legend-swatch metronome" />
-                            节拍器落点
+                            {t('preview.legendMetronome')}
                           </span>
                           <span className="preview-visualizer-legend-item">
                             <span className="preview-visualizer-legend-swatch playhead" />
-                            当前播放头
+                            {t('preview.legendPlayhead')}
                           </span>
                         </div>
                       </>
                     ) : (
                       <div className="preview-visualizer-empty">
-                        <strong>选中一首歌后，这里会出现节拍对齐视图</strong>
-                        <span>你可以直接看首拍线和节拍器线是否贴近，再决定去右侧微调偏移。</span>
+                        <strong>{t('preview.visualEmptyTitle')}</strong>
+                        <span>{t('preview.visualEmptyBody')}</span>
                       </div>
                     )}
                   </div>

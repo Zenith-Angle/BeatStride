@@ -2,7 +2,12 @@ import { app, BrowserWindow, Menu, type MenuItemConstructorOptions } from 'elect
 import type { LanguageCode } from '@shared/types';
 import { IPC_CHANNELS } from './ipc/channels';
 
-type MenuAction = 'project:new' | 'project:open' | 'project:save' | 'project:saveAs';
+type MenuAction =
+  | 'project:new'
+  | 'project:open'
+  | 'project:save'
+  | 'project:saveAs'
+  | 'app:settings';
 
 interface MenuText {
   file: string;
@@ -199,6 +204,12 @@ export function setupAppMenu(language: LanguageCode): void {
           label: text.saveAs,
           accelerator: 'CmdOrCtrl+Shift+S',
           click: () => sendMenuAction('project:saveAs')
+        },
+        { type: 'separator' },
+        {
+          label: text.settings,
+          accelerator: 'CmdOrCtrl+,',
+          click: () => sendMenuAction('app:settings')
         },
         { type: 'separator' },
         { role: 'quit', label: text.exit }

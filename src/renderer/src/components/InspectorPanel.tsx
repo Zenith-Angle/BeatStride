@@ -141,17 +141,17 @@ export function InspectorPanel({
   return (
     <aside className="panel">
       <div className="panel-header">
-        <strong>处理参数</strong>
+        <strong>{t('inspector.processingTitle')}</strong>
       </div>
       <div ref={splitRootRef} className="inspector-split no-drag">
         <div
           className="panel-content inspector-top inspector-top-pane"
           style={{ height: topHeight }}
         >
-          <h4 className="inspector-section-title">全局节奏基准</h4>
+          <h4 className="inspector-section-title">{t('inspector.globalRhythmTitle')}</h4>
           <div className="properties-grid">
             <label className="field inline">
-              <span>全局目标 BPM</span>
+              <span>{t('inspector.globalTargetBpm')}</span>
               <input
                 type="number"
                 value={project.globalTargetBpm}
@@ -161,7 +161,7 @@ export function InspectorPanel({
               />
             </label>
             <label className="field">
-              <span>默认节拍器音色</span>
+              <span>{t('inspector.defaultMetronome')}</span>
               <input
                 value={project.defaultMetronomeSamplePath}
                 onChange={(event) =>
@@ -177,16 +177,21 @@ export function InspectorPanel({
                   {Math.round(trackAlignment.targetBpm)} BPM
                 </span>
                 <span>
-                  拍号: {track.timeSignature} · 识别 {Math.round(track.analysisConfidence * 100)}% · 拍号{' '}
+                  {t('alignment.timeSignature')}
+                  {track.timeSignature} · {t('alignment.detectConfidence')}
+                  {Math.round(track.analysisConfidence * 100)}% · {t('inspector.meterConfidence')}
                   {Math.round(track.meterConfidence * 100)}%
                 </span>
-                <span>映射模式: {trackAlignment.harmonicMode}</span>
+                <span>
+                  {t('inspector.mappingMode')}
+                  {trackAlignment.harmonicMode}
+                </span>
               </div>
             ) : (
-              <p className="muted inspector-summary-card">选中工作区歌曲后，这里会显示实际映射结果。</p>
+              <p className="muted inspector-summary-card">{t('inspector.summaryEmpty')}</p>
             )}
             <p className="muted inspector-note">
-              拍号和强拍会按单曲识别并保存；下半区域只保留首拍与节拍器偏移的保底微调。
+              {t('inspector.summaryNote')}
             </p>
           </div>
         </div>
@@ -195,15 +200,15 @@ export function InspectorPanel({
           onMouseDown={() => setResizing(true)}
         />
         <div className="panel-content inspector-bottom">
-          <h4 className="inspector-section-title">微调面板</h4>
+          <h4 className="inspector-section-title">{t('inspector.fineTuneTitle')}</h4>
           <div className="inspector-section-grid">
             <section className="inspector-form-section">
-              <strong>自动对齐与节拍器</strong>
+              <strong>{t('inspector.autoAlignSection')}</strong>
               <div className="properties-grid">
                 <label className="field db-slider-field">
                   <FieldLabel
-                    text="拍子增益(dB)"
-                    help="控制叠加到歌曲上的节拍器整体音量。默认 0 dB，可在 -10 dB 到 10 dB 之间微调。"
+                    text={t('inspector.beatGain')}
+                    help={t('inspector.beatGainHelp')}
                   />
                   <div className="db-slider-row">
                     <span className="db-slider-boundary">-10</span>
@@ -234,12 +239,12 @@ export function InspectorPanel({
             </section>
 
             <section className="inspector-form-section">
-              <strong>转场与响度</strong>
+              <strong>{t('inspector.transitionSection')}</strong>
               <div className="properties-grid">
                 <label className="field inline">
                   <FieldLabel
-                    text="过渡小节"
-                    help="串烧导出时，每两首歌交叉过渡持续多少个小节。当前主要影响串烧导出，不影响单曲导出。"
+                    text={t('inspector.transitionBars')}
+                    help={t('inspector.transitionBarsHelp')}
                   />
                   <input
                     type="number"
@@ -253,8 +258,8 @@ export function InspectorPanel({
                 </label>
                 <label className="field inline">
                   <FieldLabel
-                    text="过渡 Duck(dB)"
-                    help="交叉过渡时两边一起压低多少音量，避免转场区域峰值堆叠和听感发闷。"
+                    text={t('inspector.transitionDuck')}
+                    help={t('inspector.transitionDuckHelp')}
                   />
                   <input
                     type="number"
@@ -268,8 +273,8 @@ export function InspectorPanel({
                 </label>
                 <label className="field inline">
                   <FieldLabel
-                    text="Headroom(dB)"
-                    help="最终输出前统一预留的余量，防止响度处理和叠加节拍器后出现削顶。"
+                    text={t('inspector.headroom')}
+                    help={t('inspector.headroomHelp')}
                   />
                   <input
                     type="number"
@@ -283,8 +288,8 @@ export function InspectorPanel({
                 </label>
                 <label className="field inline checkbox-field">
                   <FieldLabel
-                    text="启用 loudnorm"
-                    help="开启后导出阶段会做响度一致化。适合串烧，但会增加处理时间。"
+                    text={t('inspector.enableLoudnorm')}
+                    help={t('inspector.enableLoudnormHelp')}
                   />
                   <input
                     type="checkbox"
@@ -296,8 +301,8 @@ export function InspectorPanel({
                 </label>
                 <label className="field inline">
                   <FieldLabel
-                    text="目标 LUFS"
-                    help="整体响度目标。数值越接近 0 越响。"
+                    text={t('inspector.targetLufs')}
+                    help={t('inspector.targetLufsHelp')}
                   />
                   <input
                     type="number"
@@ -310,8 +315,8 @@ export function InspectorPanel({
                 </label>
                 <label className="field inline">
                   <FieldLabel
-                    text="目标 LRA"
-                    help="允许保留的响度动态范围。数值越大，歌曲动态起伏越明显。"
+                    text={t('inspector.targetLra')}
+                    help={t('inspector.targetLraHelp')}
                   />
                   <input
                     type="number"
@@ -325,8 +330,8 @@ export function InspectorPanel({
                 </label>
                 <label className="field inline">
                   <FieldLabel
-                    text="目标 TP"
-                    help="true peak 上限，限制输出峰值。常见安全值为 -1 dBTP。"
+                    text={t('inspector.targetTp')}
+                    help={t('inspector.targetTpHelp')}
                   />
                   <input
                     type="number"

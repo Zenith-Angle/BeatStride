@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { LANGUAGE_OPTIONS } from '@renderer/features/i18n/messages';
 import { useI18n } from '@renderer/features/i18n/I18nProvider';
 import { useTheme } from '@renderer/features/theme/ThemeProvider';
@@ -15,6 +15,8 @@ type SettingsFrame = {
   height: number;
 };
 
+type SettingsSection = 'general' | 'training' | 'ffmpeg' | 'advanced';
+
 type InteractionState =
   | {
       type: 'drag';
@@ -30,8 +32,8 @@ type InteractionState =
     }
   | null;
 
-const MIN_WIDTH = 620;
-const MIN_HEIGHT = 420;
+const MIN_WIDTH = 860;
+const MIN_HEIGHT = 560;
 const VIEWPORT_MARGIN = 16;
 
 interface PathFieldProps {
@@ -43,11 +45,11 @@ interface PathFieldProps {
 
 function getInitialFrame(): SettingsFrame {
   if (typeof window === 'undefined') {
-    return { top: 72, left: 96, width: 760, height: 520 };
+    return { top: 72, left: 96, width: 980, height: 640 };
   }
 
-  const width = Math.min(760, window.innerWidth - VIEWPORT_MARGIN * 2);
-  const height = Math.min(520, window.innerHeight - VIEWPORT_MARGIN * 2);
+  const width = Math.min(980, window.innerWidth - VIEWPORT_MARGIN * 2);
+  const height = Math.min(640, window.innerHeight - VIEWPORT_MARGIN * 2);
   return {
     width,
     height,
@@ -74,17 +76,35 @@ function clampFrame(frame: SettingsFrame): SettingsFrame {
 }
 
 function PathField({ label, value, onChange, onBrowse }: PathFieldProps) {
+  const { t } = useI18n();
   return (
-    <label className="field">
+    <label className="field settings-field">
       <span>{label}</span>
       <div className="path-field-row">
         <input value={value} onChange={(event) => onChange(event.target.value)} />
         <button type="button" className="wire-btn browse-btn" onClick={() => void onBrowse()}>
-          浏览
+          {t('common.browse')}
         </button>
       </div>
     </label>
   );
+}
+
+function formatCheckedAt(value: string, locale: string, fallback: string): string {
+  if (!value) {
+    return fallback;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return fallback;
+  }
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(parsed);
 }
 
 export function SettingsPage({ onClose }: SettingsPageProps) {
@@ -94,6 +114,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   const settings = settingsStore.settings;
   const [frame, setFrame] = useState<SettingsFrame>(() => getInitialFrame());
   const [interaction, setInteraction] = useState<InteractionState>(null);
+  const [activeSection, setActiveSection] = useState<SettingsSection>('general');
+  const [detectingFfmpeg, setDetectingFfmpeg] = useState(false);
 
   useEffect(() => {
     const handleResize = () => {
@@ -142,6 +164,270 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
     };
   }, [interaction]);
 
+  const navItems = useMemo(
+    () => [
+      { key: 'general' as const, label: t('settings.sectionGeneral'), hint: t('settings.sectionGeneralHint') },
+      {
+        key: 'training' as const,
+        label: t('settings.sectionTraining'),
+        hint: t('settings.sectionTrainingHint')
+      },
+      { key: 'ffmpeg' as const, label: t('settings.sectionFfmpeg'), hint: t('settings.sectionFfmpegHint') },
+      { key: 'advanced' as const, label: t('settings.sectionAdvanced'), hint: t('settings.sectionAdvancedHint') }
+    ],
+    [t]
+  );
+
+  const sectionMeta = useMemo(
+    () => ({
+      general: {
+        title: t('settings.sectionGeneral'),
+        description: t('settings.sectionGeneralDescription')
+      },
+      training: {
+        title: t('settings.sectionTraining'),
+        description: t('settings.sectionTrainingDescription')
+      },
+      ffmpeg: {
+        title: t('settings.sectionFfmpeg'),
+        description: t('settings.sectionFfmpegDescription')
+      },
+      advanced: {
+        title: t('settings.sectionAdvanced'),
+        description: t('settings.sectionAdvancedDescription')
+      }
+    }),
+    [t]
+  );
+
+  const ffmpegStatusLabel = settings.ffmpeg.available
+    ? t('settings.ffmpegAvailable')
+    : t('settings.ffmpegMissing');
+  const ffmpegStatusTone = settings.ffmpeg.available ? 'available' : 'missing';
+  const ffmpegMessageKey = settings.ffmpeg.message
+    ? `settings.ffmpegMessage.${settings.ffmpeg.message}`
+    : 'settings.ffmpegMessage.ffmpeg_or_ffprobe_missing';
+  const ffmpegMessage =
+    t(ffmpegMessageKey) === ffmpegMessageKey ? settings.ffmpeg.message ?? '' : t(ffmpegMessageKey);
+  const ffmpegCheckedAt = formatCheckedAt(
+    settings.ffmpeg.lastCheckedAt,
+    language,
+    t('settings.ffmpegNeverChecked')
+  );
+
+  const patchAndCheck = async (
+    patch: Parameters<typeof settingsStore.patchSettings>[0],
+    check = false
+  ) => {
+    await settingsStore.patchSettings(patch);
+    if (check) {
+      await settingsStore.checkFfmpeg();
+    }
+  };
+
+  const handleAutoDetect = async () => {
+    setDetectingFfmpeg(true);
+    try {
+      await settingsStore.checkFfmpeg({ autoDetect: true });
+    } finally {
+      setDetectingFfmpeg(false);
+    }
+  };
+
+  const renderSection = () => {
+    if (activeSection === 'general') {
+      return (
+        <div className="settings-section-stack">
+          <div className="settings-card">
+            <label className="field settings-field">
+              <span>{t('common.language')}</span>
+              <select
+                value={language}
+                onChange={(event) => setLanguage(event.target.value as typeof language)}
+              >
+                {LANGUAGE_OPTIONS.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field settings-field">
+              <span>{t('common.theme')}</span>
+              <select value={theme} onChange={(event) => setTheme(event.target.value as typeof theme)}>
+                <option value="system">{t('common.system')}</option>
+                <option value="light">{t('common.light')}</option>
+                <option value="dark">{t('common.dark')}</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      );
+    }
+
+    if (activeSection === 'training') {
+      return (
+        <div className="settings-section-stack">
+          <div className="settings-card settings-grid settings-card-grid">
+            <PathField
+              label={t('settings.defaultExportDir')}
+              value={settings.defaultExportDir}
+              onChange={(value) => void settingsStore.patchSettings({ defaultExportDir: value })}
+              onBrowse={async () => {
+                const next = await window.beatStride.selectExportDirectory();
+                if (next) {
+                  await settingsStore.patchSettings({ defaultExportDir: next });
+                }
+              }}
+            />
+            <PathField
+              label={t('settings.defaultMetronomeSample')}
+              value={settings.defaultMetronomeSamplePath}
+              onChange={(value) =>
+                void settingsStore.patchSettings({
+                  defaultMetronomeSamplePath: value
+                })
+              }
+              onBrowse={async () => {
+                const next = await window.beatStride.selectMetronomeSamplePath();
+                if (next) {
+                  await settingsStore.patchSettings({
+                    defaultMetronomeSamplePath: next
+                  });
+                }
+              }}
+            />
+            <label className="field settings-field">
+              <span>{t('settings.defaultTargetBpm')}</span>
+              <input
+                type="number"
+                value={settings.defaultTargetBpm}
+                onChange={(event) =>
+                  void settingsStore.patchSettings({ defaultTargetBpm: Number(event.target.value) })
+                }
+              />
+            </label>
+            <label className="field settings-field">
+              <span>{t('settings.defaultFade')}</span>
+              <input
+                type="number"
+                value={settings.defaultFadeMs}
+                onChange={(event) =>
+                  void settingsStore.patchSettings({ defaultFadeMs: Number(event.target.value) })
+                }
+              />
+            </label>
+            <label className="field settings-field">
+              <span>{t('settings.normalize')}</span>
+              <div className="settings-toggle-row">
+                <div className="muted settings-inline-hint">{t('settings.normalizeHint')}</div>
+                <input
+                  type="checkbox"
+                  className="settings-developer-toggle"
+                  checked={settings.normalizeLoudnessByDefault}
+                  onChange={(event) =>
+                    void settingsStore.patchSettings({
+                      normalizeLoudnessByDefault: event.target.checked
+                    })
+                  }
+                />
+              </div>
+            </label>
+          </div>
+        </div>
+      );
+    }
+
+    if (activeSection === 'ffmpeg') {
+      return (
+        <div className="settings-section-stack">
+          <div className={`settings-card settings-status-card ${ffmpegStatusTone}`}>
+            <div className="settings-status-header">
+              <div>
+                <span className="settings-status-kicker">{t('settings.ffmpegStatus')}</span>
+                <strong className="settings-status-value">{ffmpegStatusLabel}</strong>
+              </div>
+              <button type="button" className="wire-btn" onClick={() => void handleAutoDetect()} disabled={detectingFfmpeg}>
+                {detectingFfmpeg ? t('settings.ffmpegDetecting') : t('settings.ffmpegAutoDetect')}
+              </button>
+            </div>
+            <div className="settings-status-grid">
+              <div className="settings-status-item">
+                <span>{t('settings.ffmpegDetectedPath')}</span>
+                <strong>{settings.ffmpeg.ffmpegPath || settings.ffmpeg.ffprobePath || t('settings.ffmpegNoPath')}</strong>
+              </div>
+              <div className="settings-status-item">
+                <span>{t('settings.ffmpegLastChecked')}</span>
+                <strong>{ffmpegCheckedAt}</strong>
+              </div>
+              <div className="settings-status-item settings-status-item-wide">
+                <span>{t('settings.ffmpegDetectMessage')}</span>
+                <strong>{ffmpegMessage || t('settings.ffmpegMessage.ffmpeg_or_ffprobe_missing')}</strong>
+              </div>
+            </div>
+          </div>
+          <div className="settings-card settings-grid settings-card-grid">
+            <PathField
+              label={t('settings.ffmpegPath')}
+              value={settings.ffmpeg.ffmpegPath}
+              onChange={(value) =>
+                void settingsStore.patchSettings({
+                  ffmpeg: { ...settings.ffmpeg, ffmpegPath: value }
+                })
+              }
+              onBrowse={async () => {
+                const next = await window.beatStride.selectFfmpegPath();
+                if (next) {
+                  await patchAndCheck({
+                    ffmpeg: { ...settings.ffmpeg, ffmpegPath: next }
+                  }, true);
+                }
+              }}
+            />
+            <PathField
+              label={t('settings.ffprobePath')}
+              value={settings.ffmpeg.ffprobePath}
+              onChange={(value) =>
+                void settingsStore.patchSettings({
+                  ffmpeg: { ...settings.ffmpeg, ffprobePath: value }
+                })
+              }
+              onBrowse={async () => {
+                const next = await window.beatStride.selectFfprobePath();
+                if (next) {
+                  await patchAndCheck({
+                    ffmpeg: { ...settings.ffmpeg, ffprobePath: next }
+                  }, true);
+                }
+              }}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="settings-section-stack">
+        <div className="settings-card">
+          <label className="field settings-field">
+            <span>{t('settings.developerMode')}</span>
+            <div className="settings-toggle-row">
+              <div className="muted settings-inline-hint">{t('settings.developerModeHint')}</div>
+              <input
+                type="checkbox"
+                className="settings-developer-toggle"
+                checked={settings.developerMode}
+                onChange={(event) =>
+                  void settingsStore.patchSettings({ developerMode: event.target.checked })
+                }
+              />
+            </div>
+          </label>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="settings-overlay no-drag">
       <section
@@ -167,138 +453,33 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
             });
           }}
         >
-          <strong>{t('settings.title')}</strong>
-          <div className="settings-header-actions">
-            <span className="muted settings-drag-hint">可拖动 / 可拉伸</span>
-            <button onClick={onClose}>{t('common.close')}</button>
+          <div className="settings-header-copy">
+            <span className="settings-header-kicker">{t('settings.title')}</span>
+            <strong>{sectionMeta[activeSection].title}</strong>
+            <span className="muted settings-drag-hint">{sectionMeta[activeSection].description}</span>
+          </div>
+          <div className="settings-header-actions" onMouseDown={(event) => event.stopPropagation()}>
+            <span className="muted settings-drag-hint">{t('settings.windowHint')}</span>
+            <button type="button" onClick={onClose}>
+              {t('common.close')}
+            </button>
           </div>
         </div>
-        <div className="panel-content">
-          <div className="settings-grid">
-            <label className="field">
-              <span>{t('common.language')}</span>
-              <select
-                value={language}
-                onChange={(event) => setLanguage(event.target.value as typeof language)}
+        <div className="panel-content settings-center">
+          <aside className="settings-sidebar">
+            {navItems.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={`settings-nav-item ${item.key === activeSection ? 'active' : ''}`}
+                onClick={() => setActiveSection(item.key)}
               >
-                {LANGUAGE_OPTIONS.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>{t('common.theme')}</span>
-              <select value={theme} onChange={(event) => setTheme(event.target.value as typeof theme)}>
-                <option value="system">{t('common.system')}</option>
-                <option value="light">{t('common.light')}</option>
-                <option value="dark">{t('common.dark')}</option>
-              </select>
-            </label>
-            <PathField
-              label={t('settings.defaultExportDir')}
-              value={settings.defaultExportDir}
-              onChange={(value) => void settingsStore.patchSettings({ defaultExportDir: value })}
-              onBrowse={async () => {
-                const next = await window.beatStride.selectExportDirectory();
-                if (!next) {
-                  return;
-                }
-                await settingsStore.patchSettings({ defaultExportDir: next });
-              }}
-            />
-            <PathField
-              label={t('settings.ffmpegPath')}
-              value={settings.ffmpeg.ffmpegPath}
-              onChange={(value) =>
-                void settingsStore.patchSettings({
-                  ffmpeg: { ...settings.ffmpeg, ffmpegPath: value }
-                })
-              }
-              onBrowse={async () => {
-                const next = await window.beatStride.selectFfmpegPath();
-                if (!next) {
-                  return;
-                }
-                await settingsStore.patchSettings({
-                  ffmpeg: { ...settings.ffmpeg, ffmpegPath: next }
-                });
-              }}
-            />
-            <PathField
-              label={t('settings.ffprobePath')}
-              value={settings.ffmpeg.ffprobePath}
-              onChange={(value) =>
-                void settingsStore.patchSettings({
-                  ffmpeg: { ...settings.ffmpeg, ffprobePath: value }
-                })
-              }
-              onBrowse={async () => {
-                const next = await window.beatStride.selectFfprobePath();
-                if (!next) {
-                  return;
-                }
-                await settingsStore.patchSettings({
-                  ffmpeg: { ...settings.ffmpeg, ffprobePath: next }
-                });
-              }}
-            />
-            <PathField
-              label={t('settings.defaultMetronomeSample')}
-              value={settings.defaultMetronomeSamplePath}
-              onChange={(value) =>
-                void settingsStore.patchSettings({
-                  defaultMetronomeSamplePath: value
-                })
-              }
-              onBrowse={async () => {
-                const next = await window.beatStride.selectMetronomeSamplePath();
-                if (!next) {
-                  return;
-                }
-                await settingsStore.patchSettings({
-                  defaultMetronomeSamplePath: next
-                });
-              }}
-            />
-            <label className="field">
-              <span>{t('settings.defaultTargetBpm')}</span>
-              <input
-                type="number"
-                value={settings.defaultTargetBpm}
-                onChange={(event) =>
-                  void settingsStore.patchSettings({ defaultTargetBpm: Number(event.target.value) })
-                }
-              />
-            </label>
-            <label className="field">
-              <span>{t('settings.defaultFade')}</span>
-              <input
-                type="number"
-                value={settings.defaultFadeMs}
-                onChange={(event) =>
-                  void settingsStore.patchSettings({ defaultFadeMs: Number(event.target.value) })
-                }
-              />
-            </label>
-            <label className="field">
-              <span>开发者模式</span>
-              <div className="path-field-row">
-                <div className="muted settings-developer-hint">
-                  开启后允许使用 F12 / Ctrl+Shift+I，并自动打开浏览器开发者工具。
-                </div>
-                <input
-                  type="checkbox"
-                  className="settings-developer-toggle"
-                  checked={settings.developerMode}
-                  onChange={(event) =>
-                    void settingsStore.patchSettings({ developerMode: event.target.checked })
-                  }
-                />
-              </div>
-            </label>
-          </div>
+                <strong>{item.label}</strong>
+                <span>{item.hint}</span>
+              </button>
+            ))}
+          </aside>
+          <div className="settings-main">{renderSection()}</div>
         </div>
         <div
           className={`settings-resize-handle ${interaction?.type === 'resize' ? 'active' : ''}`}

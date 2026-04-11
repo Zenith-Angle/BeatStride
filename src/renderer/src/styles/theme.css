@@ -1,11 +1,11 @@
 :root {
-  --font-ui: "Segoe UI Variable", "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
-  --font-display: "Segoe UI Variable", "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
-  --radius-sm: 10px;
-  --radius-md: 16px;
+  --font-ui: "Microsoft YaHei UI", "Microsoft YaHei", "SimHei", "PingFang SC", sans-serif;
+  --font-display: "Microsoft YaHei UI", "Microsoft YaHei", "SimHei", "PingFang SC", sans-serif;
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 18px;
   --radius-lg: 24px;
-  --radius-xl: 30px;
-  --radius-blob: 28px 24px 32px 26px;
+  --radius-xl: 32px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -13,67 +13,279 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-7: 32px;
-  --shadow-sm: 0 8px 18px rgba(80, 68, 49, 0.08);
-  --shadow-md: 0 18px 38px rgba(80, 68, 49, 0.12);
-  --shadow-lg: 0 28px 64px rgba(62, 54, 38, 0.16);
-  --shadow-inner: inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  --duration-fast: 180ms;
+  --space-8: 40px;
+  --duration-fast: 140ms;
   --duration-base: 220ms;
-  --duration-slow: 260ms;
-  --ease-organic: cubic-bezier(0.24, 0.8, 0.3, 1);
-  --surface-card-cream: #f6efd8;
-  --surface-card-mint: #ddf4ea;
-  --shadow-color-rgb: 217, 210, 200;
+  --duration-slow: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-emphasis: cubic-bezier(0.18, 0.88, 0.24, 1);
+  --shadow-sm: 0 10px 24px rgba(16, 32, 54, 0.08);
+  --shadow-md: 0 22px 46px rgba(16, 32, 54, 0.12);
+  --shadow-lg: 0 30px 72px rgba(10, 24, 44, 0.16);
+  --control-shadow: 0 10px 18px rgba(11, 29, 56, 0.08);
+  --control-shadow-strong: 0 16px 26px rgba(11, 29, 56, 0.12);
+  --card-shadow: 0 16px 30px rgba(11, 29, 56, 0.08);
+  --card-shadow-strong: 0 20px 36px rgba(11, 29, 56, 0.12);
 }
 
+:root,
 :root[data-theme='light'] {
-  --bg: #fcfbf7;
-  --bg-elevated: #f7f4ee;
-  --bg-panel: #f6efd8;
-  --line: #e7e1d8;
-  --line-strong: #d6cec4;
-  --text: #252120;
-  --text-subtle: #6a6560;
-  --primary: #f29a18;
-  --primary-strong: #e8870a;
-  --accent: #14b28c;
-  --accent-soft: #ddf4ea;
-  --danger: #c86f43;
-  --waveform: #f29a18;
-  --waveform-active: #14b28c;
-  --surface-wood: rgba(242, 154, 24, 0.12);
-  --surface-leaf: rgba(20, 178, 140, 0.14);
-  --surface-water: rgba(20, 178, 140, 0.12);
-  --surface-paper: rgba(252, 251, 247, 0.9);
-  --surface-stone: rgba(217, 210, 200, 0.2);
-  --glow-warm: rgba(242, 154, 24, 0.22);
-  --surface-card-cream: #f6efd8;
-  --surface-card-mint: #ddf4ea;
-  --shadow-color-rgb: 217, 210, 200;
+  color-scheme: light;
+  --brand-orange: #ff8f1f;
+  --brand-orange-strong: #ff6d00;
+  --brand-cyan: #1eb7ff;
+  --brand-blue: #123d8f;
+  --brand-blue-deep: #0a2254;
+  --state-success: #0ea66d;
+  --state-warning: #ffb020;
+  --state-danger: #d84a4a;
+  --state-info: #1eb7ff;
+  --app-bg: #eef5ff;
+  --app-bg-2: #f9fbff;
+  --surface-1: rgba(255, 255, 255, 0.88);
+  --surface-2: rgba(255, 255, 255, 0.96);
+  --surface-3: rgba(236, 244, 255, 0.94);
+  --surface-4: rgba(224, 239, 255, 0.9);
+  --line: rgba(24, 61, 118, 0.12);
+  --line-strong: rgba(24, 61, 118, 0.24);
+  --text-1: #0d1f3c;
+  --text-2: rgba(13, 31, 60, 0.72);
+  --text-3: rgba(13, 31, 60, 0.48);
+  --glow-orange: rgba(255, 143, 31, 0.28);
+  --glow-cyan: rgba(30, 183, 255, 0.22);
+  --surface-highlight: linear-gradient(135deg, rgba(255, 143, 31, 0.14), rgba(30, 183, 255, 0.08));
+  --surface-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(237, 245, 255, 0.92));
+  --surface-panel-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(228, 240, 255, 0.95));
+  --shell-surface: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(237, 245, 255, 0.92));
+  --shell-highlight:
+    linear-gradient(90deg, rgba(255, 143, 31, 0.08), transparent 28%),
+    linear-gradient(115deg, transparent 0 68%, rgba(30, 183, 255, 0.08) 68% 74%, transparent 74%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.24), transparent);
+  --workspace-surface:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.08)),
+    linear-gradient(180deg, rgba(6, 18, 34, 0.04), transparent 18%),
+    linear-gradient(180deg, var(--surface-3), var(--surface-1));
+  --panel-surface: var(--surface-panel);
+  --panel-surface-strong: var(--surface-panel-strong);
+  --panel-gloss:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 24%),
+    linear-gradient(115deg, transparent 0 76%, rgba(30, 183, 255, 0.06) 76% 80%, transparent 80%);
+  --panel-header-surface:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4), transparent),
+    linear-gradient(90deg, rgba(255, 143, 31, 0.06), rgba(30, 183, 255, 0.04));
+  --card-surface:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(232, 242, 255, 0.72)),
+    linear-gradient(135deg, rgba(255, 143, 31, 0.05), rgba(30, 183, 255, 0.08));
+  --card-surface-soft:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(232, 242, 255, 0.5)),
+    linear-gradient(135deg, rgba(255, 143, 31, 0.05), rgba(30, 183, 255, 0.08));
+  --card-surface-emphasis:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(225, 240, 255, 0.68)),
+    linear-gradient(135deg, rgba(255, 143, 31, 0.09), rgba(30, 183, 255, 0.12));
+  --card-surface-strong:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(240, 247, 255, 0.84)),
+    linear-gradient(140deg, rgba(255, 143, 31, 0.1), rgba(30, 183, 255, 0.08));
+  --card-surface-active:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(236, 246, 255, 0.86)),
+    linear-gradient(140deg, rgba(255, 143, 31, 0.12), rgba(30, 183, 255, 0.14));
+  --card-empty-surface:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(231, 242, 255, 0.48)),
+    linear-gradient(140deg, rgba(255, 143, 31, 0.05), rgba(30, 183, 255, 0.08));
+  --control-surface:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(232, 242, 255, 0.84)),
+    var(--surface-highlight);
+  --control-surface-soft:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(236, 244, 255, 0.8)),
+    rgba(255, 255, 255, 0.72);
+  --control-surface-plain: rgba(255, 255, 255, 0.72);
+  --field-surface: rgba(255, 255, 255, 0.84);
+  --field-surface-soft: rgba(255, 255, 255, 0.7);
+  --chip-surface: rgba(255, 255, 255, 0.74);
+  --status-chip-surface: rgba(255, 255, 255, 0.82);
+  --stage-surface:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.74), rgba(229, 241, 255, 0.6));
+  --stage-overlay: linear-gradient(180deg, rgba(6, 18, 34, 0.04), rgba(255, 255, 255, 0.12));
+  --stage-grid-overlay:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 20%),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 56px,
+      rgba(18, 61, 143, 0.03) 56px 57px
+    );
+  --app-overlay:
+    radial-gradient(circle at 14% 14%, rgba(255, 143, 31, 0.2), transparent 18%),
+    radial-gradient(circle at 84% 16%, rgba(30, 183, 255, 0.16), transparent 20%),
+    linear-gradient(115deg, transparent 0 48%, rgba(255, 255, 255, 0.06) 48% 50%, transparent 50% 100%);
+  --app-stripes:
+    repeating-linear-gradient(
+      120deg,
+      transparent 0 56px,
+      rgba(255, 255, 255, 0.03) 56px 58px
+    );
+  --app-root-overlay: radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.08), transparent 36%);
+  --overlay-shine: linear-gradient(115deg, transparent 0 72%, rgba(255, 255, 255, 0.24) 72% 78%, transparent 78%);
+  --surface-inset: rgba(255, 255, 255, 0.82);
+  --surface-inset-soft: rgba(255, 255, 255, 0.54);
+  --surface-inset-strong: rgba(255, 255, 255, 0.84);
+  --surface-inset-brand: rgba(255, 255, 255, 0.24);
+  --thumb-border: rgba(255, 255, 255, 0.82);
+  --thumb-border-strong: rgba(255, 255, 255, 0.84);
+  --focus-ring: rgba(30, 183, 255, 0.16);
+  --track-rest: rgba(18, 61, 143, 0.12);
+  --track-rest-strong: rgba(18, 61, 143, 0.18);
+  --marker-surface: rgba(255, 255, 255, 0.82);
+  --waveform-fill: rgba(255, 143, 31, 0.2);
+  --waveform-stroke: #178ef4;
+  --waveform-accent: #ff7a00;
+  --chip-bg: rgba(255, 255, 255, 0.82);
+  --overlay-bg: rgba(10, 20, 40, 0.22);
+  --selection: rgba(30, 183, 255, 0.2);
+  --shadow-rgb: 11, 29, 56;
+  --bg: var(--app-bg);
+  --bg-elevated: var(--surface-3);
+  --bg-panel: var(--surface-4);
+  --line-old: var(--line);
+  --text: var(--text-1);
+  --text-subtle: var(--text-2);
+  --primary: var(--brand-orange);
+  --primary-strong: var(--brand-orange-strong);
+  --accent: var(--brand-cyan);
+  --accent-soft: rgba(30, 183, 255, 0.14);
+  --danger: var(--state-danger);
+  --waveform: var(--waveform-accent);
+  --waveform-active: var(--waveform-stroke);
 }
 
 :root[data-theme='dark'] {
-  --bg: #1d1a19;
-  --bg-elevated: #2a2523;
-  --bg-panel: #38312d;
-  --line: #504842;
-  --line-strong: #655c55;
-  --text: #f4efea;
-  --text-subtle: #b9b0a8;
-  --primary: #f29a18;
-  --primary-strong: #e8870a;
-  --accent: #14b28c;
-  --accent-soft: #21463c;
-  --danger: #de8150;
-  --waveform: #f29a18;
-  --waveform-active: #14b28c;
-  --surface-wood: rgba(242, 154, 24, 0.16);
-  --surface-leaf: rgba(20, 178, 140, 0.18);
-  --surface-water: rgba(20, 178, 140, 0.16);
-  --surface-paper: rgba(56, 49, 45, 0.9);
-  --surface-stone: rgba(217, 210, 200, 0.1);
-  --glow-warm: rgba(242, 154, 24, 0.18);
-  --surface-card-cream: #433b36;
-  --surface-card-mint: #1f3d34;
-  --shadow-color-rgb: 18, 15, 13;
+  color-scheme: dark;
+  --brand-orange: #ff9a32;
+  --brand-orange-strong: #ff7a00;
+  --brand-cyan: #3ac8ff;
+  --brand-blue: #74aaff;
+  --brand-blue-deep: #d7e7ff;
+  --state-success: #33c18d;
+  --state-warning: #f4be4d;
+  --state-danger: #ff7b7b;
+  --state-info: #3ac8ff;
+  --app-bg: #07121f;
+  --app-bg-2: #0b1830;
+  --surface-1: rgba(14, 28, 48, 0.86);
+  --surface-2: rgba(16, 32, 56, 0.92);
+  --surface-3: rgba(11, 24, 42, 0.98);
+  --surface-4: rgba(18, 36, 62, 0.96);
+  --line: rgba(135, 176, 255, 0.12);
+  --line-strong: rgba(135, 176, 255, 0.26);
+  --text-1: #e8f0ff;
+  --text-2: rgba(232, 240, 255, 0.72);
+  --text-3: rgba(232, 240, 255, 0.44);
+  --glow-orange: rgba(255, 122, 0, 0.22);
+  --glow-cyan: rgba(58, 200, 255, 0.18);
+  --surface-highlight: linear-gradient(135deg, rgba(255, 122, 0, 0.14), rgba(58, 200, 255, 0.1));
+  --surface-panel: linear-gradient(180deg, rgba(16, 32, 56, 0.96), rgba(9, 20, 36, 0.96));
+  --surface-panel-strong: linear-gradient(180deg, rgba(18, 36, 62, 0.98), rgba(9, 18, 34, 0.98));
+  --shell-surface: linear-gradient(180deg, rgba(14, 27, 45, 0.96), rgba(7, 14, 24, 0.96));
+  --shell-highlight:
+    linear-gradient(90deg, rgba(255, 122, 0, 0.06), transparent 26%),
+    linear-gradient(115deg, transparent 0 68%, rgba(58, 200, 255, 0.07) 68% 74%, transparent 74%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent);
+  --workspace-surface:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)),
+    linear-gradient(180deg, rgba(8, 15, 26, 0.72), transparent 18%),
+    linear-gradient(180deg, rgba(11, 24, 42, 0.98), rgba(8, 16, 28, 0.98));
+  --panel-surface: linear-gradient(180deg, rgba(14, 28, 48, 0.96), rgba(9, 19, 33, 0.96));
+  --panel-surface-strong: linear-gradient(180deg, rgba(16, 31, 52, 0.98), rgba(9, 17, 30, 0.98));
+  --panel-gloss:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 24%),
+    linear-gradient(115deg, transparent 0 76%, rgba(58, 200, 255, 0.06) 76% 80%, transparent 80%);
+  --panel-header-surface:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent),
+    linear-gradient(90deg, rgba(255, 122, 0, 0.06), rgba(58, 200, 255, 0.04));
+  --card-surface:
+    linear-gradient(180deg, rgba(18, 33, 54, 0.96), rgba(10, 19, 33, 0.92)),
+    linear-gradient(140deg, rgba(255, 122, 0, 0.05), rgba(58, 200, 255, 0.06));
+  --card-surface-soft:
+    linear-gradient(180deg, rgba(16, 29, 47, 0.92), rgba(10, 18, 31, 0.88)),
+    linear-gradient(140deg, rgba(255, 122, 0, 0.04), rgba(58, 200, 255, 0.05));
+  --card-surface-emphasis:
+    linear-gradient(180deg, rgba(19, 35, 57, 0.96), rgba(11, 21, 36, 0.92)),
+    linear-gradient(140deg, rgba(255, 122, 0, 0.07), rgba(58, 200, 255, 0.07));
+  --card-surface-strong:
+    linear-gradient(180deg, rgba(21, 38, 62, 0.98), rgba(12, 22, 37, 0.94)),
+    linear-gradient(140deg, rgba(255, 122, 0, 0.08), rgba(58, 200, 255, 0.08));
+  --card-surface-active:
+    linear-gradient(180deg, rgba(18, 37, 63, 0.98), rgba(11, 26, 45, 0.96)),
+    linear-gradient(140deg, rgba(255, 122, 0, 0.1), rgba(58, 200, 255, 0.1));
+  --card-empty-surface:
+    linear-gradient(180deg, rgba(15, 27, 43, 0.92), rgba(8, 16, 28, 0.88)),
+    linear-gradient(140deg, rgba(255, 122, 0, 0.04), rgba(58, 200, 255, 0.06));
+  --control-surface:
+    linear-gradient(180deg, rgba(18, 33, 54, 0.96), rgba(10, 19, 33, 0.92)),
+    var(--surface-highlight);
+  --control-surface-soft:
+    linear-gradient(180deg, rgba(17, 31, 49, 0.92), rgba(10, 18, 30, 0.88)),
+    rgba(10, 18, 30, 0.78);
+  --control-surface-plain: rgba(10, 18, 30, 0.78);
+  --field-surface: rgba(9, 17, 30, 0.9);
+  --field-surface-soft: rgba(11, 22, 36, 0.82);
+  --chip-surface: rgba(9, 17, 31, 0.84);
+  --status-chip-surface: rgba(8, 18, 36, 0.84);
+  --stage-surface:
+    linear-gradient(180deg, rgba(12, 24, 38, 0.96), rgba(6, 12, 21, 0.94));
+  --stage-overlay: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(58, 200, 255, 0.02));
+  --stage-grid-overlay:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 20%),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 56px,
+      rgba(135, 176, 255, 0.06) 56px 57px
+    );
+  --app-overlay:
+    radial-gradient(circle at 14% 14%, rgba(255, 122, 0, 0.12), transparent 18%),
+    radial-gradient(circle at 84% 16%, rgba(58, 200, 255, 0.1), transparent 20%),
+    linear-gradient(115deg, transparent 0 48%, rgba(255, 255, 255, 0.02) 48% 50%, transparent 50% 100%);
+  --app-stripes:
+    repeating-linear-gradient(
+      120deg,
+      transparent 0 56px,
+      rgba(255, 255, 255, 0.015) 56px 58px
+    );
+  --app-root-overlay: radial-gradient(circle at 50% 0%, rgba(58, 200, 255, 0.06), transparent 36%);
+  --overlay-shine: linear-gradient(115deg, transparent 0 72%, rgba(255, 255, 255, 0.08) 72% 78%, transparent 78%);
+  --surface-inset: rgba(255, 255, 255, 0.1);
+  --surface-inset-soft: rgba(255, 255, 255, 0.06);
+  --surface-inset-strong: rgba(255, 255, 255, 0.14);
+  --surface-inset-brand: rgba(255, 255, 255, 0.18);
+  --thumb-border: rgba(208, 226, 255, 0.18);
+  --thumb-border-strong: rgba(208, 226, 255, 0.22);
+  --focus-ring: rgba(58, 200, 255, 0.2);
+  --track-rest: rgba(135, 176, 255, 0.18);
+  --track-rest-strong: rgba(135, 176, 255, 0.24);
+  --marker-surface: rgba(8, 18, 34, 0.9);
+  --waveform-fill: rgba(255, 122, 0, 0.16);
+  --waveform-stroke: #3ac8ff;
+  --waveform-accent: #ff9a32;
+  --chip-bg: rgba(8, 18, 36, 0.82);
+  --overlay-bg: rgba(2, 6, 14, 0.48);
+  --selection: rgba(58, 200, 255, 0.2);
+  --shadow-rgb: 0, 0, 0;
+  --shadow-sm: 0 14px 26px rgba(0, 0, 0, 0.28);
+  --shadow-md: 0 22px 40px rgba(0, 0, 0, 0.34);
+  --shadow-lg: 0 34px 72px rgba(0, 0, 0, 0.4);
+  --control-shadow: 0 14px 24px rgba(0, 0, 0, 0.22);
+  --control-shadow-strong: 0 20px 30px rgba(0, 0, 0, 0.28);
+  --card-shadow: 0 18px 32px rgba(0, 0, 0, 0.24);
+  --card-shadow-strong: 0 22px 40px rgba(0, 0, 0, 0.3);
+  --bg: var(--app-bg);
+  --bg-elevated: var(--surface-3);
+  --bg-panel: var(--surface-4);
+  --line-old: var(--line);
+  --text: var(--text-1);
+  --text-subtle: var(--text-2);
+  --primary: var(--brand-orange);
+  --primary-strong: var(--brand-orange-strong);
+  --accent: var(--brand-cyan);
+  --accent-soft: rgba(58, 200, 255, 0.14);
+  --danger: var(--state-danger);
+  --waveform: var(--waveform-accent);
+  --waveform-active: var(--waveform-stroke);
 }

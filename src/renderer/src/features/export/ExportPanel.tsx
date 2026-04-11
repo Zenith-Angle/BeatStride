@@ -31,7 +31,7 @@ function resolveDefaultOutputDir(project: ProjectFile, settingsDefaultDir?: stri
 }
 
 function joinDisplayPath(outputDir: string, fileName: string, format: 'wav' | 'mp3'): string {
-  const safeBaseName = fileName.trim() || '未命名导出';
+  const safeBaseName = fileName.trim() || 'beatstride-export';
   if (!outputDir) {
     return `${safeBaseName}.${format}`;
   }
@@ -202,14 +202,14 @@ export function ExportPanel({
               placeholder={
                 getParentDirectory(project.meta.filePath) ||
                 appSettings.defaultExportDir ||
-                '未保存工程时会回退到系统默认目录'
+                t('export.outputDirPlaceholder')
               }
             />
             <button onClick={pickOutputDir}>...</button>
           </div>
         </label>
         <label className="field">
-          <span>{mode === 'single' ? '单曲导出名' : '串烧导出名'}</span>
+          <span>{mode === 'single' ? t('export.singleName') : t('export.medleyName')}</span>
           <input
             value={outputBaseName}
             onChange={(event) => setOutputBaseName(event.target.value)}
@@ -218,13 +218,18 @@ export function ExportPanel({
                 persistExportPreset({ medleyBaseName: outputBaseName.trim() });
               }
             }}
-            placeholder={mode === 'single' ? '当前单曲导出文件名' : '默认使用工程名'}
+            placeholder={
+              mode === 'single' ? t('export.singleNamePlaceholder') : t('export.medleyNamePlaceholder')
+            }
             disabled={mode === 'single' && !selectedTrack}
           />
         </label>
-        <div className="muted export-path-preview">导出路径：{displayPath}</div>
+        <div className="muted export-path-preview">
+          {t('export.outputPreview')}
+          {displayPath}
+        </div>
         <div className="muted export-tuning-hint">
-          当前微调:
+          {t('export.currentTuning')}
           {' '}
           {project.mixTuning.stretchEngine}
           {' / '}
@@ -232,11 +237,11 @@ export function ExportPanel({
           {' / '}
           {project.mixTuning.loudnormEnabled
             ? `loudnorm ${project.mixTuning.targetLufs} LUFS`
-            : 'loudnorm 关闭'}
+            : t('export.loudnormOff')}
         </div>
         {singleBlocked && (
           <div className="export-warning">
-            单曲导出需要先在工作区选中一首歌曲。
+            {t('export.singleBlocked')}
           </div>
         )}
         <button className="primary export-run-button" onClick={runExport} disabled={singleBlocked}>
@@ -253,7 +258,7 @@ export function ExportPanel({
                 className="export-open-output"
                 onClick={() => window.beatStride.openPath(activeJob.outputPath!)}
               >
-                {t('export.completed')}
+                {t('export.openOutput')}
               </button>
             )}
             {activeJob.error && <div className="export-error">{activeJob.error}</div>}

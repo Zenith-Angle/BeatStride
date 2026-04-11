@@ -36,6 +36,7 @@ export function createMainWindow(options?: {
     height: 920,
     minWidth: 1180,
     minHeight: 720,
+    autoHideMenuBar: true,
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 12, y: 16 },
     backgroundColor: '#f6f2eb',
@@ -53,6 +54,10 @@ export function createMainWindow(options?: {
   window.on('ready-to-show', () => {
     window.show();
   });
+
+  if (process.platform !== 'darwin') {
+    window.setMenuBarVisibility(false);
+  }
 
   window.webContents.setWindowOpenHandler((details) => {
     void shell.openExternal(details.url);

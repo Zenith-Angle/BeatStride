@@ -9,7 +9,7 @@ interface AppSettingsState {
   setLanguage: (language: LanguageCode) => Promise<void>;
   setTheme: (theme: ThemeMode) => Promise<void>;
   patchSettings: (patch: Partial<AppSettings>) => Promise<void>;
-  checkFfmpeg: () => Promise<void>;
+  checkFfmpeg: (options?: { autoDetect?: boolean }) => Promise<void>;
 }
 
 export const useAppSettingsStore = create<AppSettingsState>((set, get) => ({
@@ -35,10 +35,11 @@ export const useAppSettingsStore = create<AppSettingsState>((set, get) => ({
     });
     set({ settings: next });
   },
-  checkFfmpeg: async () => {
+  checkFfmpeg: async (options) => {
     const ffmpeg = await window.beatStride.checkFfmpeg({
       ffmpegPath: get().settings.ffmpeg.ffmpegPath,
-      ffprobePath: get().settings.ffmpeg.ffprobePath
+      ffprobePath: get().settings.ffmpeg.ffprobePath,
+      autoDetect: options?.autoDetect
     });
     set((state) => ({
       settings: {
